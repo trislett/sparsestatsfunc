@@ -7,6 +7,50 @@ from statsmodels.stats.multitest import multipletests
 
 from sparsestatsfunc.cynumstats import cy_lin_lstsqr_mat_residual, cy_lin_lstsqr_mat, fast_se_of_slope, tval_fast
 
+import rpy2.robjects as robjects
+from rpy2.robjects import FloatVector, numpy2ri
+from rpy2.robjects.packages import importr
+stats = importr('stats')
+base = importr('base')
+spls = importr('spls')
+numpy2ri.activate()
+
+# spls( x, y, K, eta, kappa=0.5, select="pls2", fit="simpls", scale.x=TRUE, scale.y=FALSE, eps=1e-4, maxstep=100, trace=FALSE)
+
+class sparse_pls_r:
+	def __init__(self, n_components, eta, kappa = 0.5, max_iter = 100, algorithm_selection = "pls2", algorithm_fit = "kernelpls", scale_x = True, scale_y = True, effective_zero = 0.0001):
+		self.n_components = n_components
+		self.eta = eta
+		self.kappa = kappa
+		self.max_iter = max_iter
+		self.scale_x = scale_x # implement later
+		self.scale_y = scale_y # implement later
+		self.penalty = "l1"
+		self.algorithm_selection = algorithm_selection
+		self.algorithm_fit = algorithm_fit
+		self.effective_zero = effective_zero
+		self.max_iter = max_iter
+	def fit(self, X, y):
+		model = spls.spls(X, y,
+							K = self.n_components,
+							eta = self.eta,
+							select = self.algorithm_selection,
+							fit = self.algorithm_fit,
+							eps = self.effective_zero,
+							maxstep = self.max_iter)
+		components = np.zeros((self.n_components, X.shape[1], y.shape[1]))
+		sel_vars = []
+		for i in range(self.n_components):
+			components[i] = model.rx2("betamat")[i]
+			sel_vars.append(model.rx2("new2As")[i])
+		self.component_ = np.array(components)
+		self.selectedvariablescomponts_ = np.array(sel_vars, dtype=object)
+		self.selectedvariablesindex_ = np.sort(np.concatenate(sel_vars)) - 1
+		self.coef_ = stats.coef(model)
+	def predict(self, X):
+		return(np.dot(X,self.coef_))
+
+
 def dummy_code_cosine(time_variable, period = [24.0]):
 	exog_vars = np.ones((len(time_variable)))
 	for i in range(len(period)):
@@ -221,15 +265,6 @@ class tm_glm:
 		else:
 			print("Error: arrays must be of same length")
 			quit()
-
-	def randomized_maximum_value(self, iterator = 0, F = True, TFCE = None):
-		if F:
-			if len(self.exog.name) > 1:
-				return np.max(self.glm_F(iterator = iterator, randomise = True),1)
-			else:
-				return np.max(self.glm_F(iterator = iterator, randomise = True))
-		if T:
-			return np.max(self.glm_T(iterator = iterator, randomise = True),1)
 
 	def stack_ones(self, arr):
 		"""
@@ -478,7 +513,7 @@ class tm_glm:
 			if output_statistics:
 				return(self.Fmodel, self.Fvar)
 
-	def calculate_cosinor_metrics(self, period_arr, two_step_regression = False, calculate_cosinor_stats = False):
+	def calculate_cosinor_metrics(self, period_arr, exogenoues_variable, two_step_regression = False, calculate_cosinor_stats = False):
 		"""
 		https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3991883/
 		https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3663600/

@@ -11,16 +11,22 @@ from rpy2.robjects import FloatVector, numpy2ri
 from rpy2.robjects.packages import importr
 stats = importr('stats')
 base = importr('base')
-mixOmics = importr('mixOmics')
+spls = importr("spls")
 numpy2ri.activate()
 
 DESCRIPTION = "sparsestatsfunc"
 
-def run(opts):
+def run():
 	# place holder
+	try:
+		spls = importr("spls")
+	except:
+		print("install R-packages")
+		utils = importr('utils')
+		utils.install_packages("spls")
 	print("PASSED TEST")
 
 if __name__ == "__main__":
 #	parser = getArgumentParser()
 #	opts = parser.parse_args()
-	run(opts)
+	run()
