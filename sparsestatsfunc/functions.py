@@ -15,8 +15,6 @@ base = importr('base')
 spls = importr('spls')
 numpy2ri.activate()
 
-# spls( x, y, K, eta, kappa=0.5, select="pls2", fit="simpls", scale.x=TRUE, scale.y=FALSE, eps=1e-4, maxstep=100, trace=FALSE)
-
 class spls_rwrapper:
 	"""
 	Wrapper that uses the spls r package, and rpy2
@@ -32,7 +30,7 @@ class spls_rwrapper:
 		n_components : array
 			The number of components to fit
 		eta : float
-			The sparsity metric ranging from 0 to 1. At Eta = 0 sPLS is equivalent to PLS
+			The regularization coefficient ranging from 0 to <1. At Eta = 0, sPLS is equivalent to PLS
 		kappa : float
 			Parameter to control the effect of the concavity of the objective function and the closeness of original and surrogate direction vector. kappa should be between 0 and 0.5 (default = 0.5).
 		max_iter : int
@@ -74,14 +72,14 @@ class spls_rwrapper:
 			Array of responses [N_subjects, N_responses]
 		Returns
 		---------
-		self.components_ : array
+		self.betacomponents_ : array
 			beta component vectors [N_components, N_predictors, N_responses]
 		self.selectedvariablescomponents_ : object
 			selected variables for each component [N_components, N_selected]
 		self.selectedvariablesindex_ : arr1
 			Selected variables index. Useful for subsetting
 		self.coef_ : array
-			coefficient array
+			coefficient array [N_predictors, N_responses]
 		"""
 		X = np.array(X)
 		y = np.array(y)
@@ -97,7 +95,7 @@ class spls_rwrapper:
 		for i in range(self.n_components):
 			components[i] = model.rx2("betamat")[i]
 			sel_vars.append(model.rx2("new2As")[i])
-		self.components_ = np.array(components)
+		self.betacomponents_ = np.array(components)
 		self.selectedvariablescomponents_ = np.array(sel_vars, dtype=object) - 1
 		self.selectedvariablesindex_ = np.sort(np.concatenate(sel_vars)) - 1
 		self.coef_ = stats.coef(model)
