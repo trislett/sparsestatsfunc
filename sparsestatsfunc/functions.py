@@ -17,8 +17,40 @@ numpy2ri.activate()
 
 # spls( x, y, K, eta, kappa=0.5, select="pls2", fit="simpls", scale.x=TRUE, scale.y=FALSE, eps=1e-4, maxstep=100, trace=FALSE)
 
-class sparse_pls_r:
-	def __init__(self, n_components, eta, kappa = 0.5, max_iter = 100, algorithm_selection = "pls2", algorithm_fit = "kernelpls", scale_x = True, scale_y = True, effective_zero = 0.0001):
+class spls_rwrapper:
+	"""
+	Wrapper that uses the spls r package, and rpy2
+	https://cran.r-project.org/web/packages/spls/
+	Based on: Chun and Keles (2010), doi:10.1111/j.1467-9868.2009.00723.x
+	"""
+	def __init__(self, n_components, eta, kappa = 0.5, max_iter = 100, algorithm_selection = "pls2", algorithm_fit = "simpls", scale_x = True, scale_y = False, effective_zero = 0.0001):
+		"""
+		Setting for spls
+		
+		Parameters
+		----------
+		n_components : array
+			The number of components to fit
+		eta : float
+			The sparsity metric ranging from 0 to 1. At Eta = 0 sPLS is equivalent to PLS
+		kappa : float
+			Parameter to control the effect of the concavity of the objective function and the closeness of original and surrogate direction vector. kappa should be between 0 and 0.5 (default = 0.5).
+		max_iter : int
+			Maximum number of interactions for fitting direction vector (default = 100).
+		algorithm_selection : str
+			PLS algorithm for variable selection (default = "pls2"). Choices: {"pls2", "simpls"}
+		algorithm_selection : str
+			PLS algorithm for model fitting (default = "simpls"). Choices: {"kernelpls", "widekernelpls", "simpls","oscorespls"}
+		scale_x : bool
+			z-scale X
+		scale_y : bool
+			z-scale y
+		effective_zero : float
+			The threshold for effect zero (default = 0.0001)
+		Returns
+		---------
+		The sPLS function
+		"""
 		self.n_components = n_components
 		self.eta = eta
 		self.kappa = kappa
@@ -31,6 +63,28 @@ class sparse_pls_r:
 		self.effective_zero = effective_zero
 		self.max_iter = max_iter
 	def fit(self, X, y):
+		"""
+		Fit for spls model
+		
+		Parameters
+		----------
+		X : array
+			Array of predictors [N_subjects, N_predictors]
+		y : float
+			Array of responses [N_subjects, N_responses]
+		Returns
+		---------
+		self.components_ : array
+			beta component vectors [N_components, N_predictors, N_responses]
+		self.selectedvariablescomponents_ : object
+			selected variables for each component [N_components, N_selected]
+		self.selectedvariablesindex_ : arr1
+			Selected variables index. Useful for subsetting
+		self.coef_ : array
+			coefficient array
+		"""
+		X = np.array(X)
+		y = np.array(y)
 		model = spls.spls(X, y,
 							K = self.n_components,
 							eta = self.eta,
@@ -43,11 +97,14 @@ class sparse_pls_r:
 		for i in range(self.n_components):
 			components[i] = model.rx2("betamat")[i]
 			sel_vars.append(model.rx2("new2As")[i])
-		self.component_ = np.array(components)
-		self.selectedvariablescomponts_ = np.array(sel_vars, dtype=object)
+		self.components_ = np.array(components)
+		self.selectedvariablescomponents_ = np.array(sel_vars, dtype=object) - 1
 		self.selectedvariablesindex_ = np.sort(np.concatenate(sel_vars)) - 1
 		self.coef_ = stats.coef(model)
 	def predict(self, X):
+		"""
+		Predict y from X using the spls model
+		"""
 		return(np.dot(X,self.coef_))
 
 
