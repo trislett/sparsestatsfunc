@@ -4,16 +4,170 @@ import numpy as np
 
 from scipy.stats import t, f
 from statsmodels.stats.multitest import multipletests
-
-from sparsestatsfunc.cynumstats import cy_lin_lstsqr_mat_residual, cy_lin_lstsqr_mat, fast_se_of_slope, tval_fast
+from joblib import Parallel, delayed
 
 import rpy2.robjects as robjects
 from rpy2.robjects import FloatVector, numpy2ri
 from rpy2.robjects.packages import importr
+
+from sparsestatsfunc.cynumstats import cy_lin_lstsqr_mat_residual, cy_lin_lstsqr_mat, fast_se_of_slope, tval_fast
+
 stats = importr('stats')
 base = importr('base')
 spls = importr('spls')
 numpy2ri.activate()
+
+class bootstraper_parallel():
+	def __init__(self, n_jobs, n_boot = 1000, split = 0.5):
+		self.n_jobs = n_jobs
+		self.n_boot = n_boot
+		self.split = split
+	def bootstrap_by_group(self, group, split = 0.5):
+		ugroup = np.unique(group)
+		lengroup = len(group)
+		indices = np.arange(0,lengroup,1)
+		indx_0 = []
+		indx_1 = []
+		for g in ugroup:
+			pg = np.random.permutation(indices[group==g])
+			indx_0.append(pg[:int(len(pg)*split)])
+			indx_1.append(pg[int(len(pg)*split):])
+		return(np.concatenate(indx_0), np.concatenate(indx_1))
+	def cv_params_search_spls(self, X, y, group, eta_range = np.arange(.1,1.,.1), max_n_comp = 10):
+		ugroup = np.unique(group)
+		Q2_SEARCH = np.zeros((max_n_comp, len(eta_range)))
+		Q2_SEARCH_SD = np.zeros((max_n_comp, len(eta_range)))
+		RMSE_CV_SEARCH = np.zeros((max_n_comp, len(eta_range)))
+		RMSE_CV_SEARCH_SD = np.zeros((max_n_comp, len(eta_range)))
+		for c in range(max_n_comp):
+			K = c + 1
+			print(K)
+			for e, eta in enumerate(eta_range):
+				temp_Q2 = []
+				temp_rmse = []
+				if ((K+1) < X.shape[1]) and (y.shape[1] > (K+1)):
+					for g in ugroup:
+						Y_train = y[group != g]
+						X_train = X[group != g]
+						X_test = X[group == g]
+						Y_test = y[group == g]
+						# kick out effective zero predictors
+						X_test = X_test[:,X_train.std(0) > 0.0001]
+						X_train = X_train[:,X_train.std(0) > 0.0001]
+						spls = spls_rwrapper(n_components = K, eta = eta)
+						spls.fit(X_train, Y_train)
+						Y_proj = spls.predict(X_test)
+						temp_Q2.append(explained_variance_score(Y_test, Y_proj))
+						temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
+					Q2_SEARCH[c, e] = np.mean(temp_Q2)
+					Q2_SEARCH_SD[c, e] = np.std(temp_Q2)
+					RMSE_CV_SEARCH[c, e] = np.mean(temp_rmse)
+					RMSE_CV_SEARCH_SD[c, e] = np.std(temp_rmse)
+				else:
+					Q2_SEARCH[c, e] = 0
+					Q2_SEARCH_SD[c, e] = 0
+					RMSE_CV_SEARCH[c, e] = 1
+					RMSE_CV_SEARCH_SD[c, e] = 1
+		# re-ordering stuff Comp [low to high], Eta [low to high]
+		self.Q2_SEARCH_ = Q2_SEARCH.T
+		self.Q2_SEARCH_SD_ = Q2_SEARCH_SD.T
+		self.RMSE_CV_SEARCH_ = RMSE_CV_SEARCH.T
+		self.RMSE_CV_SEARCH_SD_ = RMSE_CV_SEARCH_SD.T
+		self.search_eta_range_ = eta_range[::-1]
+		self.max_n_comp_ = max_n_comp
+		xy = (self.RMSE_CV_SEARCH_ == np.nanmin(self.RMSE_CV_SEARCH_))*1
+		self.best_K_ = int(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
+		self.best_eta_ = float(self.search_eta_range_[xy.mean(1) > 0])
+		print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
+	def plot_cv_params_search_spls(self):
+		assert hasattr(self,'best_eta_'), "Error: run cv_params_search_spls"
+		plt.imshow(self.Q2_SEARCH_, interpolation = None, cmap='jet')
+		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in bs.search_eta_range_.astype(str)])
+		plt.ylabel('eta (sparsity)')
+		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
+		plt.xlabel('Components')
+		plt.colorbar()
+		plt.title("Q-Squared [CV]")
+		plt.show()
+
+		plt.imshow(self.RMSE_CV_SEARCH_, interpolation = None, cmap='jet_r')
+		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in bs.search_eta_range_.astype(str)])
+		plt.ylabel('eta (sparsity)')
+		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
+		plt.xlabel('Components')
+		plt.colorbar()
+		plt.title("RMSE-Squared [CV]")
+		plt.show()
+
+	def bootstrap_spls(self, i, X, y, n_comp, group, split, eta):
+		if i % 100 == 0: 
+			print("Bootstrap : %d" % (i))
+		train_idx, _ = self.bootstrap_by_group(group = group, split = split)
+		X = X[train_idx]
+		y = y[train_idx]
+		boot_spls2 = spls_rwrapper(n_components = n_comp, eta = eta)
+		boot_spls2.fit(X, y)
+		selector = np.zeros((X.shape[1]))
+		selector[boot_spls2.selectedvariablesindex_] = 1
+		return(selector)
+	def run_bootstrap_spls(self, X, y, n_comp, group, eta, split = 0.5):
+		selected_vars = Parallel(n_jobs=12)(delayed(self.bootstrap_spls)(i, X = X, y = y, n_comp = n_comp, group = group, split = self.split, eta = eta) for i in range(self.n_boot))
+		self.selected_vars_ = np.array(selected_vars)
+		self.selected_vars_mean_ = np.mean(selected_vars, 0)
+		self.X = X
+		self.y = y
+		self.n_comp = n_comp
+		self.eta = eta
+		self.split = split
+		self.group = group
+		self.ugroup = np.unique(group)
+	def cv_search_array(self, search_array = np.arange(.2,1.,.05)):
+		assert hasattr(self,'selected_vars_mean_'), "Error: run bootstrap"
+		ve_cv = []
+		rmse_cv = []
+		full_model_ve = []
+		full_model_rmse = []
+		for s in search_array:
+			print(np.round(s,3))
+			selection_mask = self.selected_vars_mean_ > s
+			CV_temp_rmse = []
+			CV_temp_ve = []
+			X_SEL = self.X[:,selection_mask]
+			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
+				for g in self.ugroup:
+					Y_train = self.y[self.group != g]
+					X_train = X_SEL[self.group != g]
+					X_test = X_SEL[self.group == g]
+					Y_test = self.y[self.group == g]
+					spls = spls_rwrapper(n_components = self.n_comp, eta = 0)
+					spls.fit(X_train, Y_train)
+					Y_proj = spls.predict(X_test)
+					score = explained_variance_score(Y_test, Y_proj)
+					print("%s : %1.3f" % (g, score))
+					CV_temp_ve.append(score)
+					CV_temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
+				print("CV MODEL : %1.3f +/- %1.3f" % (np.mean(CV_temp_ve), np.std(CV_temp_ve)))
+				rmse_cv.append(np.mean(CV_temp_rmse))
+				ve_cv.append(np.mean(CV_temp_ve))
+				# full model
+				spls = spls_rwrapper(n_components = self.n_comp, eta = 0)
+				spls.fit(X_SEL, self.y)
+				Y_proj = spls.predict(X_SEL)
+				score = explained_variance_score(self.y, Y_proj)
+				print("MODEL : %1.3f" % (score))
+				full_model_ve.append(score)
+				full_model_rmse.append(mean_squared_error(Y_Model, Y_proj, squared = False))
+			else:
+				rmse_cv.append(0.)
+				ve_cv.append(0.)
+				full_model_ve.append(0.)
+				full_model_rmse.append(0.)
+		self.RMSE_CV_ = np.array(rmse_cv)
+		self.Q2_ = np.array(ve_cv)
+		self.RMSE_LEARN_ = np.array(full_model_rmse)
+		self.R2_LEARN_ = np.array(full_model_ve)
+
+
 
 class spls_rwrapper:
 	"""
