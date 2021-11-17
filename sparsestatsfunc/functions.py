@@ -1,13 +1,15 @@
 #!/usr/bin/env python
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 from scipy.stats import t, f
 from statsmodels.stats.multitest import multipletests
 from joblib import Parallel, delayed
 
-import rpy2.robjects as robjects
-from rpy2.robjects import FloatVector, numpy2ri
+from sklearn.metrics import r2_score, mean_squared_error, explained_variance_score
+
+from rpy2.robjects import numpy2ri
 from rpy2.robjects.packages import importr
 
 from sparsestatsfunc.cynumstats import cy_lin_lstsqr_mat_residual, cy_lin_lstsqr_mat, fast_se_of_slope, tval_fast
@@ -76,29 +78,48 @@ class bootstraper_parallel():
 		self.search_eta_range_ = eta_range[::-1]
 		self.max_n_comp_ = max_n_comp
 		xy = (self.RMSE_CV_SEARCH_ == np.nanmin(self.RMSE_CV_SEARCH_))*1
-		self.best_K_ = int(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
-		self.best_eta_ = float(self.search_eta_range_[xy.mean(1) > 0])
-		print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
+		print_optimal_values = True
+		try:
+			self.best_K_ = int(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
+		except:
+			print_optimal_values = False
+			print("Warning: multiple components have the best value.")
+			print(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
+			self.best_K_ = np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0]
+		try:
+			self.best_eta_ = float(self.search_eta_range_[xy.mean(1) > 0])
+		except:
+			print_optimal_values = False
+			print("Warning: multiple sparsity thresholds have the best value.")
+			print(self.search_eta_range_[xy.mean(1) > 0])
+			self.best_eta_ = self.search_eta_range_[xy.mean(1) > 0]
+		if print_optimal_values:
+			print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
+
 	def plot_cv_params_search_spls(self):
-		assert hasattr(self,'best_eta_'), "Error: run cv_params_search_spls"
+		assert hasattr(self,'best_eta_', nan_unstable = True), "Error: run cv_params_search_spls"
+		Q2_SEARCH = self.Q2_SEARCH_
+		if nan_unstable:
+			Q2_SEARCH[Q2_SEARCH < 0] = np.nan
 		plt.imshow(self.Q2_SEARCH_, interpolation = None, cmap='jet')
-		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in bs.search_eta_range_.astype(str)])
+		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
 		plt.ylabel('eta (sparsity)')
 		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
 		plt.xlabel('Components')
 		plt.colorbar()
 		plt.title("Q-Squared [CV]")
 		plt.show()
-
+		RMSE_CV_SEARCH = self.RMSE_CV_SEARCH_
+		if nan_unstable:
+			RMSE_CV_SEARCH[RMSE_CV_SEARCH > 1] = np.nan
 		plt.imshow(self.RMSE_CV_SEARCH_, interpolation = None, cmap='jet_r')
-		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in bs.search_eta_range_.astype(str)])
+		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
 		plt.ylabel('eta (sparsity)')
 		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
 		plt.xlabel('Components')
 		plt.colorbar()
 		plt.title("RMSE-Squared [CV]")
 		plt.show()
-
 	def bootstrap_spls(self, i, X, y, n_comp, group, split, eta):
 		if i % 100 == 0: 
 			print("Bootstrap : %d" % (i))
@@ -156,7 +177,7 @@ class bootstraper_parallel():
 				score = explained_variance_score(self.y, Y_proj)
 				print("MODEL : %1.3f" % (score))
 				full_model_ve.append(score)
-				full_model_rmse.append(mean_squared_error(Y_Model, Y_proj, squared = False))
+				full_model_rmse.append(mean_squared_error(self.y, Y_proj, squared = False))
 			else:
 				rmse_cv.append(0.)
 				ve_cv.append(0.)
