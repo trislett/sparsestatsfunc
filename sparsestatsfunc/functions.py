@@ -129,7 +129,7 @@ class bootstraper_parallel():
 		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
 		plt.xlabel('Components')
 		plt.colorbar()
-		plt.title("RMSE-Squared [CV]")
+		plt.title("RMSEP-Squared [CV]")
 		plt.show()
 	def bootstrap_spls(self, i, X, y, n_comp, group, split, eta):
 		if i % 100 == 0: 
@@ -143,7 +143,7 @@ class bootstraper_parallel():
 		selector[boot_spls2.selectedvariablesindex_] = 1
 		return(selector)
 	def run_bootstrap_spls(self, X, y, n_comp, group, eta, split = 0.5):
-		selected_vars = Parallel(n_jobs=12)(delayed(self.bootstrap_spls)(i, X = X, y = y, n_comp = n_comp, group = group, split = self.split, eta = eta) for i in range(self.n_boot))
+		selected_vars = Parallel(n_jobs=self.n_jobs)(delayed(self.bootstrap_spls)(i, X = X, y = y, n_comp = n_comp, group = group, split = self.split, eta = eta) for i in range(self.n_boot))
 		self.selected_vars_ = np.array(selected_vars)
 		self.selected_vars_mean_ = np.mean(selected_vars, 0)
 		self.X = X
@@ -326,14 +326,6 @@ class spls_rwrapper:
 		Predict y from X using the spls model
 		"""
 		return(np.dot(X,self.coef_))
-
-
-def dummy_code_cosine(time_variable, period = [24.0]):
-	exog_vars = np.ones((len(time_variable)))
-	for i in range(len(period)):
-		exog_vars = np.column_stack((exog_vars, np.cos(np.divide(2.0 * np.pi * time_variable, period[i]))))
-		exog_vars = np.column_stack((exog_vars, np.sin(np.divide(2.0 * np.pi * time_variable, period[i]))))
-	return(np.array(exog_vars))
 
 class linear_regression:
 	def __init__(self):
