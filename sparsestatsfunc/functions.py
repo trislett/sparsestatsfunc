@@ -39,8 +39,8 @@ class bootstraper_parallel():
 		ugroup = np.unique(group)
 		Q2_SEARCH = np.zeros((max_n_comp, len(eta_range)))
 		Q2_SEARCH_SD = np.zeros((max_n_comp, len(eta_range)))
-		RMSE_CV_SEARCH = np.zeros((max_n_comp, len(eta_range)))
-		RMSE_CV_SEARCH_SD = np.zeros((max_n_comp, len(eta_range)))
+		RMSEP_CV_SEARCH = np.zeros((max_n_comp, len(eta_range)))
+		RMSEP_CV_SEARCH_SD = np.zeros((max_n_comp, len(eta_range)))
 		for c in range(max_n_comp):
 			K = c + 1
 			print(K)
@@ -63,21 +63,21 @@ class bootstraper_parallel():
 						temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
 					Q2_SEARCH[c, e] = np.mean(temp_Q2)
 					Q2_SEARCH_SD[c, e] = np.std(temp_Q2)
-					RMSE_CV_SEARCH[c, e] = np.mean(temp_rmse)
-					RMSE_CV_SEARCH_SD[c, e] = np.std(temp_rmse)
+					RMSEP_CV_SEARCH[c, e] = np.mean(temp_rmse)
+					RMSEP_CV_SEARCH_SD[c, e] = np.std(temp_rmse)
 				else:
 					Q2_SEARCH[c, e] = 0
 					Q2_SEARCH_SD[c, e] = 0
-					RMSE_CV_SEARCH[c, e] = 1
-					RMSE_CV_SEARCH_SD[c, e] = 1
+					RMSEP_CV_SEARCH[c, e] = 1
+					RMSEP_CV_SEARCH_SD[c, e] = 1
 		# re-ordering stuff Comp [low to high], Eta [low to high]
 		self.Q2_SEARCH_ = Q2_SEARCH.T
 		self.Q2_SEARCH_SD_ = Q2_SEARCH_SD.T
-		self.RMSE_CV_SEARCH_ = RMSE_CV_SEARCH.T
-		self.RMSE_CV_SEARCH_SD_ = RMSE_CV_SEARCH_SD.T
+		self.RMSEP_CV_SEARCH_ = RMSEP_CV_SEARCH.T
+		self.RMSEP_CV_SEARCH_SD_ = RMSEP_CV_SEARCH_SD.T
 		self.search_eta_range_ = eta_range[::-1]
 		self.max_n_comp_ = max_n_comp
-		xy = (self.RMSE_CV_SEARCH_ == np.nanmin(self.RMSE_CV_SEARCH_))*1
+		xy = (self.RMSEP_CV_SEARCH_ == np.nanmin(self.RMSEP_CV_SEARCH_))*1
 		print_optimal_values = True
 		try:
 			self.best_K_ = int(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
@@ -109,10 +109,10 @@ class bootstraper_parallel():
 		plt.colorbar()
 		plt.title("Q-Squared [CV]")
 		plt.show()
-		RMSE_CV_SEARCH = self.RMSE_CV_SEARCH_
+		RMSEP_CV_SEARCH = self.RMSEP_CV_SEARCH_
 		if nan_unstable:
-			RMSE_CV_SEARCH[RMSE_CV_SEARCH > 1] = np.nan
-		plt.imshow(self.RMSE_CV_SEARCH_, interpolation = None, cmap='jet_r')
+			RMSEP_CV_SEARCH[RMSEP_CV_SEARCH > 1] = np.nan
+		plt.imshow(self.RMSEP_CV_SEARCH_, interpolation = None, cmap='jet_r')
 		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
 		plt.ylabel('eta (sparsity)')
 		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
@@ -189,14 +189,13 @@ class bootstraper_parallel():
 		self.R2_LEARN_ = np.array(full_model_ve)
 
 
-
 class spls_rwrapper:
 	"""
 	Wrapper that uses the spls r package, and rpy2
 	https://cran.r-project.org/web/packages/spls/
 	Based on: Chun and Keles (2010), doi:10.1111/j.1467-9868.2009.00723.x
 	"""
-	def __init__(self, n_components, eta, kappa = 0.5, max_iter = 100, algorithm_selection = "pls2", algorithm_fit = "simpls", scale_x = True, scale_y = False, effective_zero = 0.0001):
+	def __init__(self, n_components, eta, kappa = 0.5, max_iter = 100, algorithm_selection = "pls2", algorithm_fit = "simpls", scale_x = True, scale_y = True, effective_zero = 0.0001):
 		"""
 		Setting for spls
 		
@@ -256,6 +255,7 @@ class spls_rwrapper:
 		self.coef_ : array
 			coefficient array [N_predictors, N_responses]
 		"""
+		X, y, X_mean, y_mean, X_std, y_std = self.zscaler_XY(X, y, scale_x = scale_x, scale_y = scale_y)
 		X = np.array(X)
 		y = np.array(y)
 		model = spls.spls(X, y,
@@ -271,9 +271,45 @@ class spls_rwrapper:
 			components[i] = model.rx2("betamat")[i]
 			sel_vars.append(model.rx2("new2As")[i])
 		self.betacomponents_ = np.array(components)
+		self.W = model.rx2("projection")
+		self.x_scores_ = np.dot(X, self.W)
 		self.selectedvariablescomponents_ = np.array(sel_vars, dtype=object) - 1
 		self.selectedvariablesindex_ = np.sort(np.concatenate(sel_vars)) - 1
 		self.coef_ = stats.coef(model)
+		self.X_ = X
+		self.X_mean_ = X_mean
+		self.X_std_ = X_std
+		self.y_ = y
+		self.y_mean_ = y_mean
+		self.y_std = y_std
+	def zscaler_XY(self, X, y, axis=0, w_mean=True, scale_x = True, scale_y = True):
+		"""
+		Applies scaling to X and y, return means and std regardless
+		"""
+		X_ = np.zeros_like(X)
+		X_[:] = np.copy(X)
+		X_mean_ = np.mean(X_, axis)
+		X_std_ = np.std(X_, axis)
+		Y_ = np.zeros_like(Y)
+		Y_[:] = np.copy(Y)
+		Y_mean_ = np.mean(Y_, axis)
+		Y_std_ = np.std(Y_, axis)
+		if w_mean:
+			X_ -= X_mean_
+			Y_ -= Y_mean_
+		if w_std:
+			if scale_x:
+				X_ /= X_std_
+			if scale_y:
+				Y_ /= Y_std_
+		return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
+	def transform(self, X):
+		"""
+		Calculate the component scores for predictors.
+		"""
+		X -= self.X_mean_
+		X /= self.X_std_
+		return(np.dot(X, self.W))
 	def predict(self, X):
 		"""
 		Predict y from X using the spls model
@@ -846,3 +882,89 @@ class tm_glm:
 		self.AMPLITUDE = np.array(AMPLITUDE)
 		self.ACROPHASE = np.array(ACROPHASE)
 		self.ACROPHASE_24 = np.array(ACROPHASE_24)
+
+
+#class spls_mixOmics_rwrapper:
+#	"""
+#	Wrapper that uses the mixomics.spls r package, and rpy2
+#	https://cran.r-project.org/web/packages/spls/
+
+#	Package Reference:
+#	Rohart F, Gautier B, Singh A, and Le Cao K-A (2017) mixOmics: An R
+#	package for 'omics feature selection and multiple data integration.
+#	PLoS computational biology 13(11):e1005752
+
+#	Function refereces:
+#	LE Cao, K.-A., Martin, P.G.P., Robert-Granie, C. and Besse, P. (2009). Sparse canonical methods
+#	for biological data integration: application to a cross-platform study. BMC Bioinformatics 10:34.
+#	LE Cao, K.-A., Rossouw, D., Robert-Granie, C. and Besse, P. (2008). A sparse PLS for variable
+#	selection when integrating Omics data. Statistical Applications in Genetics and Molecular Biology
+#	7, article 35.
+#	
+#	Sparse SVD: Shen, H. and Huang, J. Z. (2008). Sparse principal component analysis via regularized
+#	low rank matrix approximation. Journal of Multivariate Analysis 99, 1015-1034.
+#	PLS methods: Tenenhaus, M. (1998). La regression PLS: theorie et pratique. Paris: Editions
+#	Technic. Chapters 9 and 11.
+#	
+#	Abdi H (2010). Partial least squares regression and projection on latent structure regression (PLS
+#	Regression). Wiley Interdisciplinary Reviews: Computational Statistics, 2(1), 97-106.
+#	Wold H. (1966). Estimation of principal components and related models by iterative least squares.
+#	In: Krishnaiah, P. R. (editors), Multivariate Analysis. Academic Press, N.Y., 391-420.
+#	"""
+
+#X,
+#Y,
+#ncomp = 2,
+#mode = c("regression", "canonical", "invariant", "classic"),
+#keepX,
+#keepY,
+#scale = TRUE,
+#tol = 1e-06,
+#max.iter = 100,
+#near.zero.var = FALSE,
+#logratio = "none",
+#multilevel = NULL,
+#all.outputs = TRUE
+
+#	def __init__(self, n_components, spls_mode = "regression", keepX = None, keepY = None, tol = 1e-6, max_iter = 100, all_output = True):
+#		"""
+#		Setting for spls
+#		
+#		Parameters
+#		----------
+#		n_components : array
+#			The number of components to fit
+#		eta : float
+#			The regularization coefficient ranging from 0 to <1. At Eta = 0, sPLS is equivalent to PLS
+#		kappa : float
+#			Parameter to control the effect of the concavity of the objective function and the closeness of original and surrogate direction vector. kappa should be between 0 and 0.5 (default = 0.5).
+#		max_iter : int
+#			Maximum number of interactions for fitting direction vector (default = 100).
+#		algorithm_selection : str
+#			PLS algorithm for variable selection (default = "pls2"). Choices: {"pls2", "simpls"}
+#		algorithm_selection : str
+#			PLS algorithm for model fitting (default = "simpls"). Choices: {"kernelpls", "widekernelpls", "simpls","oscorespls"}
+#		scale_x : bool
+#			z-scale X
+#		scale_y : bool
+#			z-scale y
+#		effective_zero : float
+#			The threshold for effect zero (default = 0.0001)
+#		Returns
+#		---------
+#		The sPLS function
+#		"""
+#		spls_modes = ["regression", "canonical", "invariant", "classic"]
+#		assert spls_mode in spls_modes, "Error: sPLS model [%s] not recognized" % spls_mode
+
+#		self.n_components = n_components
+#		self.spls_mode = spls_mode
+#		self.keepX = keepX
+#		self.keepY = keepY
+#		self.max_iter = max_iter
+#		self.tol = tol
+#		self.all_output = all_output
+#		self.penalty = "l1"
+
+
+
