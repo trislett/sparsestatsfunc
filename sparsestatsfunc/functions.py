@@ -284,8 +284,6 @@ class spls_rwrapper:
 		self.betacomponents_ = np.array(components)
 		self.selectedvariablescomponents_ = np.array(sel_vars, dtype=object) - 1
 		self.selectedvariablesindex_ = np.sort(np.concatenate(sel_vars)) - 1
-		self.x_scores_ = x_scores
-		self.y_scores_ = y_scores
 		self.coef_ = stats.coef(model)
 		self.X_ = X
 		self.idxNotEffZeroX_ = (X.std(0) > 0.0001)*1
