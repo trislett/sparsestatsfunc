@@ -237,8 +237,8 @@ class spls_rwrapper:
 		self.eta = eta
 		self.kappa = kappa
 		self.max_iter = max_iter
-		self.scale_x = scale_x # implement later
-		self.scale_y = scale_y # implement later
+		self.scale_x = scale_x
+		self.scale_y = scale_y
 		self.penalty = "l1"
 		self.algorithm_selection = algorithm_selection
 		self.algorithm_fit = algorithm_fit
@@ -265,7 +265,7 @@ class spls_rwrapper:
 		self.coef_ : array
 			coefficient array [N_predictors, N_responses]
 		"""
-		X, y, X_mean, y_mean, X_std, y_std = self.zscaler_XY(X, y, scale_x = scale_x, scale_y = scale_y)
+		X, y, X_mean, y_mean, X_std, y_std = self.zscaler_XY(X, y, scale_x = self.scale_x, scale_y = self.scale_y)
 		X = np.array(X)
 		y = np.array(y)
 		model = spls.spls(X, y,
