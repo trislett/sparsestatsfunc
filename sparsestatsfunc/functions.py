@@ -107,8 +107,8 @@ class bootstraper_parallel():
 		if print_optimal_values:
 			print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
 
-	def plot_cv_params_search_spls(self):
-		assert hasattr(self,'best_eta_', nan_unstable = True), "Error: run cv_params_search_spls"
+	def plot_cv_params_search_spls(self, nan_unstable = True):
+		assert hasattr(self,'best_eta_'), "Error: run cv_params_search_spls"
 		Q2_SEARCH = self.Q2_SEARCH_
 		if nan_unstable:
 			Q2_SEARCH[Q2_SEARCH < 0] = np.nan
