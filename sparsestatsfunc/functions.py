@@ -300,8 +300,8 @@ class spls_rwrapper:
 		X_[:] = np.copy(X)
 		X_mean_ = np.nanmean(X_, axis)
 		X_std_ = np.nanstd(X_, axis = axis, ddof=1)
-		Y_ = np.zeros_like(Y)
-		Y_[:] = np.copy(Y)
+		Y_ = np.zeros_like(y)
+		Y_[:] = np.copy(y)
 		Y_mean_ = np.nanmean(Y_, axis)
 		Y_std_ = np.nanstd(Y_, axis = axis, ddof=1)
 		if w_mean:
