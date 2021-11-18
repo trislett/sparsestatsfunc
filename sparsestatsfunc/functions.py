@@ -307,11 +307,10 @@ class spls_rwrapper:
 		if w_mean:
 			X_ -= X_mean_
 			Y_ -= Y_mean_
-		if w_std:
-			if scale_x:
-				X_ /= X_std_
-			if scale_y:
-				Y_ /= Y_std_
+		if scale_x:
+			X_ /= X_std_
+		if scale_y:
+			Y_ /= Y_std_
 		return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
 	def transform(self, X):
 		"""
