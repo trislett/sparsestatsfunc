@@ -8,6 +8,7 @@ from statsmodels.stats.multitest import multipletests
 from joblib import Parallel, delayed
 
 from sklearn.metrics import r2_score, mean_squared_error, explained_variance_score
+from sklearn.cross_decomposition import PLSRegression
 
 from rpy2.robjects import numpy2ri
 from rpy2.robjects.packages import importr
@@ -281,10 +282,10 @@ class spls_rwrapper:
 			components[i] = model.rx2("betamat")[i]
 			sel_vars.append(model.rx2("new2As")[i])
 		self.betacomponents_ = np.array(components)
-		self.W = model.rx2("projection")
-		self.x_scores_ = np.dot(X[:,X.std(0) > 0.0001], self.W)
 		self.selectedvariablescomponents_ = np.array(sel_vars, dtype=object) - 1
 		self.selectedvariablesindex_ = np.sort(np.concatenate(sel_vars)) - 1
+		self.x_scores_ = x_scores
+		self.y_scores_ = y_scores
 		self.coef_ = stats.coef(model)
 		self.X_ = X
 		self.idxNotEffZeroX_ = (X.std(0) > 0.0001)*1
@@ -313,13 +314,16 @@ class spls_rwrapper:
 		if scale_y:
 			Y_ /= Y_std_
 		return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
-	def transform(self, X):
+	def transform(self, X, y = None):
 		"""
 		Calculate the component scores for predictors.
 		"""
-		X -= self.X_mean_
-		X /= self.X_std_
-		return(np.dot(X, self.W))
+		# spls::spls uses pls::plsr. I'll use sklearn.cross_decomposition.PLSRegression
+		pls2 = PLSRegression(n_components=self.n_components).fit(self.X_[:, self.selectedvariablesindex_], self.y_)
+		if y is not None:
+			return(pls2.transform(X[:, self.selectedvariablesindex_], y))
+		else:
+			return(pls2.transform(X[:, self.selectedvariablesindex_], y))
 	def predict(self, X):
 		"""
 		Predict y from X using the spls model
