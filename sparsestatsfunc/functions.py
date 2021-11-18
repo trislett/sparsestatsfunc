@@ -19,6 +19,7 @@ base = importr('base')
 spls = importr('spls')
 numpy2ri.activate()
 
+
 class bootstraper_parallel():
 	def __init__(self, n_jobs, n_boot = 1000, split = 0.5):
 		self.n_jobs = n_jobs
@@ -35,41 +36,50 @@ class bootstraper_parallel():
 			indx_0.append(pg[:int(len(pg)*split)])
 			indx_1.append(pg[int(len(pg)*split):])
 		return(np.concatenate(indx_0), np.concatenate(indx_1))
-	def cv_params_search_spls(self, X, y, group, eta_range = np.arange(.1,1.,.1), max_n_comp = 10):
+	def par_params_searcher(self, c, X, y, group, eta_range = np.arange(.1,1.,.1)):
+		K = c + 1
 		ugroup = np.unique(group)
-		Q2_SEARCH = np.zeros((max_n_comp, len(eta_range)))
-		Q2_SEARCH_SD = np.zeros((max_n_comp, len(eta_range)))
-		RMSEP_CV_SEARCH = np.zeros((max_n_comp, len(eta_range)))
-		RMSEP_CV_SEARCH_SD = np.zeros((max_n_comp, len(eta_range)))
-		for c in range(max_n_comp):
-			K = c + 1
-			print(K)
-			for e, eta in enumerate(eta_range):
-				temp_Q2 = []
-				temp_rmse = []
-				if ((K+1) < X.shape[1]) and (y.shape[1] > (K+1)):
-					for g in ugroup:
-						Y_train = y[group != g]
-						X_train = X[group != g]
-						X_test = X[group == g]
-						Y_test = y[group == g]
-						# kick out effective zero predictors
-						X_test = X_test[:,X_train.std(0) > 0.0001]
-						X_train = X_train[:,X_train.std(0) > 0.0001]
-						spls = spls_rwrapper(n_components = K, eta = eta)
-						spls.fit(X_train, Y_train)
-						Y_proj = spls.predict(X_test)
-						temp_Q2.append(explained_variance_score(Y_test, Y_proj))
-						temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
-					Q2_SEARCH[c, e] = np.mean(temp_Q2)
-					Q2_SEARCH_SD[c, e] = np.std(temp_Q2)
-					RMSEP_CV_SEARCH[c, e] = np.mean(temp_rmse)
-					RMSEP_CV_SEARCH_SD[c, e] = np.std(temp_rmse)
-				else:
-					Q2_SEARCH[c, e] = 0
-					Q2_SEARCH_SD[c, e] = 0
-					RMSEP_CV_SEARCH[c, e] = 1
-					RMSEP_CV_SEARCH_SD[c, e] = 1
+		cQ2_SEARCH = np.zeros((len(eta_range)))
+		cQ2_SEARCH_SD = np.zeros((len(eta_range)))
+		cRMSEP_CV_SEARCH = np.zeros((len(eta_range)))
+		cRMSEP_CV_SEARCH_SD = np.zeros((len(eta_range)))
+		for e, eta in enumerate(eta_range):
+			temp_Q2 = []
+			temp_rmse = []
+			if ((K+1) < X.shape[1]) and (y.shape[1] > (K+1)):
+				for g in ugroup:
+					Y_train = y[group != g]
+					X_train = X[group != g]
+					X_test = X[group == g]
+					Y_test = y[group == g]
+					# kick out effective zero predictors
+					X_test = X_test[:,X_train.std(0) > 0.0001]
+					X_train = X_train[:,X_train.std(0) > 0.0001]
+					spls = spls_rwrapper(n_components = K, eta = eta)
+					spls.fit(X_train, Y_train)
+					Y_proj = spls.predict(X_test)
+					temp_Q2.append(explained_variance_score(Y_test, Y_proj))
+					temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
+				cQ2_SEARCH[e] = np.mean(temp_Q2)
+				cQ2_SEARCH_SD[e] = np.std(temp_Q2)
+				cRMSEP_CV_SEARCH[e] = np.mean(temp_rmse)
+				cRMSEP_CV_SEARCH_SD[e] = np.std(temp_rmse)
+			else:
+				cQ2_SEARCH[e] = 0
+				cQ2_SEARCH_SD[e] = 0
+				cRMSEP_CV_SEARCH[e] = 1
+				cRMSEP_CV_SEARCH_SD[e] = 1
+		print("Component %d finished" % K)
+		return(c, cQ2_SEARCH, cQ2_SEARCH_SD, cRMSEP_CV_SEARCH, cRMSEP_CV_SEARCH_SD)
+	def cv_params_search_spls(self, X, y, group, eta_range = np.arange(.1,1.,.1), max_n_comp = 10):
+		# parallel by max_n_comp
+		output = Parallel(n_jobs=min(self.n_jobs,max_n_comp))(delayed(self.par_params_searcher)(c, X = X, y = y, group = group, eta_range = eta_range) for c in range(max_n_comp))
+		ord_k, Q2_SEARCH, Q2_SEARCH_SD, RMSEP_CV_SEARCH, RMSEP_CV_SEARCH_SD = zip(*output)
+		ord_k = np.array(ord_k)
+		Q2_SEARCH = np.row_stack(Q2_SEARCH)[ord_k]
+		Q2_SEARCH_SD = np.row_stack(Q2_SEARCH_SD)[ord_k]
+		RMSEP_CV_SEARCH = np.row_stack(RMSEP_CV_SEARCH)[ord_k]
+		RMSEP_CV_SEARCH_SD = np.row_stack(RMSEP_CV_SEARCH_SD)[ord_k]
 		# re-ordering stuff Comp [low to high], Eta [low to high]
 		self.Q2_SEARCH_ = Q2_SEARCH.T
 		self.Q2_SEARCH_SD_ = Q2_SEARCH_SD.T
@@ -288,12 +298,12 @@ class spls_rwrapper:
 		"""
 		X_ = np.zeros_like(X)
 		X_[:] = np.copy(X)
-		X_mean_ = np.mean(X_, axis)
-		X_std_ = np.std(X_, axis)
+		X_mean_ = np.nanmean(X_, axis)
+		X_std_ = np.nanstd(X_, axis = axis, ddof=1)
 		Y_ = np.zeros_like(Y)
 		Y_[:] = np.copy(Y)
-		Y_mean_ = np.mean(Y_, axis)
-		Y_std_ = np.std(Y_, axis)
+		Y_mean_ = np.nanmean(Y_, axis)
+		Y_std_ = np.nanstd(Y_, axis = axis, ddof=1)
 		if w_mean:
 			X_ -= X_mean_
 			Y_ -= Y_mean_
