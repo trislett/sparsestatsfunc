@@ -244,7 +244,7 @@ class spls_rwrapper:
 		self.algorithm_fit = algorithm_fit
 		self.effective_zero = effective_zero
 		self.max_iter = max_iter
-	def fit(self, X, y):
+	def fit(self, X, y, transform = True):
 		"""
 		Fit for spls model
 		
@@ -282,11 +282,12 @@ class spls_rwrapper:
 			sel_vars.append(model.rx2("new2As")[i])
 		self.betacomponents_ = np.array(components)
 		self.W = model.rx2("projection")
-		self.x_scores_ = np.dot(X, self.W)
+		self.x_scores_ = np.dot(X[:,X.std(0) > 0.0001], self.W)
 		self.selectedvariablescomponents_ = np.array(sel_vars, dtype=object) - 1
 		self.selectedvariablesindex_ = np.sort(np.concatenate(sel_vars)) - 1
 		self.coef_ = stats.coef(model)
 		self.X_ = X
+		self.idxNotEffZeroX_ = (X.std(0) > 0.0001)*1
 		self.X_mean_ = X_mean
 		self.X_std_ = X_std
 		self.y_ = y
