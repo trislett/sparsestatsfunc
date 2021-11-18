@@ -286,7 +286,6 @@ class spls_rwrapper:
 		self.selectedvariablesindex_ = np.sort(np.concatenate(sel_vars)) - 1
 		self.coef_ = stats.coef(model)
 		self.X_ = X
-		self.idxNotEffZeroX_ = (X.std(0) > 0.0001)*1
 		self.X_mean_ = X_mean
 		self.X_std_ = X_std
 		self.y_ = y
