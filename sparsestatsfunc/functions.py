@@ -106,7 +106,6 @@ class bootstraper_parallel():
 			self.best_eta_ = self.search_eta_range_[xy.mean(1) > 0]
 		if print_optimal_values:
 			print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
-
 	def plot_cv_params_search_spls(self, nan_unstable = True):
 		assert hasattr(self,'best_eta_'), "Error: run cv_params_search_spls"
 		Q2_SEARCH = self.Q2_SEARCH_
@@ -154,9 +153,11 @@ class bootstraper_parallel():
 		self.group = group
 		self.ugroup = np.unique(group)
 	def cv_search_array(self, search_array = np.arange(.2,1.,.05)):
-		assert hasattr(self,'selected_vars_mean_'), "Error: run bootstrap"
+		assert hasattr(self,'selected_vars_mean_'), "Error: bootstrap parallel is missing"
 		ve_cv = []
 		rmse_cv = []
+		ve_cv_std = []
+		rmse_cv_std = []
 		full_model_ve = []
 		full_model_rmse = []
 		for s in search_array:
@@ -171,9 +172,8 @@ class bootstraper_parallel():
 					X_train = X_SEL[self.group != g]
 					X_test = X_SEL[self.group == g]
 					Y_test = self.y[self.group == g]
-					spls = spls_rwrapper(n_components = self.n_comp, eta = 0)
-					spls.fit(X_train, Y_train)
-					Y_proj = spls.predict(X_test)
+					pls2 = PLSRegression(n_components=self.n_comp).fit(X_train, Y_train)
+					Y_proj = pls2.predict(X_test)
 					score = explained_variance_score(Y_test, Y_proj)
 					print("%s : %1.3f" % (g, score))
 					CV_temp_ve.append(score)
@@ -181,10 +181,11 @@ class bootstraper_parallel():
 				print("CV MODEL : %1.3f +/- %1.3f" % (np.mean(CV_temp_ve), np.std(CV_temp_ve)))
 				rmse_cv.append(np.mean(CV_temp_rmse))
 				ve_cv.append(np.mean(CV_temp_ve))
+				rmse_cv_std.append(np.std(CV_temp_rmse))
+				ve_cv_std.append(np.std(CV_temp_ve))
 				# full model
-				spls = spls_rwrapper(n_components = self.n_comp, eta = 0)
-				spls.fit(X_SEL, self.y)
-				Y_proj = spls.predict(X_SEL)
+				pls2 = PLSRegression(n_components=self.n_comp).fit(X_SEL, self.y)
+				Y_proj = pls2.predict(X_SEL)
 				score = explained_variance_score(self.y, Y_proj)
 				print("MODEL : %1.3f" % (score))
 				full_model_ve.append(score)
@@ -192,11 +193,15 @@ class bootstraper_parallel():
 			else:
 				rmse_cv.append(0.)
 				ve_cv.append(0.)
+				rmse_cv_std.append(0.)
+				ve_cv_std.append(0.)
 				full_model_ve.append(0.)
 				full_model_rmse.append(0.)
-		self.RMSE_CV_ = np.array(rmse_cv)
+		self.RMSEP_CV_ = np.array(rmse_cv)
 		self.Q2_ = np.array(ve_cv)
-		self.RMSE_LEARN_ = np.array(full_model_rmse)
+		self.RMSEP_CV_SD_ = np.array(rmse_cv)
+		self.Q2_SD_ = np.array(ve_cv)
+		self.RMSEP_LEARN_ = np.array(full_model_rmse)
 		self.R2_LEARN_ = np.array(full_model_ve)
 
 
