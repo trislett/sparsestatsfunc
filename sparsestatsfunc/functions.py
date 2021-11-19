@@ -203,6 +203,18 @@ class spls_parallel():
 		self.Q2_SD_ = np.array(ve_cv_std)
 		self.RMSEP_LEARN_ = np.array(full_model_rmse)
 		self.R2_LEARN_ = np.array(full_model_ve)
+		self.search_thresholds_ = search_array
+	def plot_cv_search_array(self):
+		assert hasattr(self,'search_thresholds_'), "Error: run cv_search_array"
+		Xthresholds = self.search_thresholds_
+		plt.plot(Xthresholds, self.Q2_, color='blue')
+		plt.fill_between(Xthresholds, self.Q2_-self.Q2_SD_, self.Q2_+self.Q2_SD_, alpha=0.5, edgecolor='blue', facecolor='lightsteelblue', linestyle=":")
+		plt.ylabel('Q-Squared')
+		plt.xlabel('Selection Threshold')
+		plt.xticks(Xthresholds, [s[:4] for s in np.round(Xthresholds,3).astype(str)])
+		plt.title("sPLS Model: Components = %d, eta = %1.2f, n_boot = %d" % (self.n_comp, self.eta, self.n_boot))
+		plt.show()
+
 
 
 class spls_rwrapper:
