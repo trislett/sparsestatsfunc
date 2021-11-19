@@ -199,8 +199,8 @@ class spls_parallel():
 				full_model_rmse.append(0.)
 		self.RMSEP_CV_ = np.array(rmse_cv)
 		self.Q2_ = np.array(ve_cv)
-		self.RMSEP_CV_SD_ = np.array(rmse_cv)
-		self.Q2_SD_ = np.array(ve_cv)
+		self.RMSEP_CV_SD_ = np.array(rmse_cv_std)
+		self.Q2_SD_ = np.array(ve_cv_std)
 		self.RMSEP_LEARN_ = np.array(full_model_rmse)
 		self.R2_LEARN_ = np.array(full_model_ve)
 
