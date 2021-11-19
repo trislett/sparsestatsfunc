@@ -21,7 +21,7 @@ spls = importr('spls')
 numpy2ri.activate()
 
 
-class bootstraper_parallel():
+class spls_parallel():
 	def __init__(self, n_jobs, n_boot = 1000, split = 0.5):
 		self.n_jobs = n_jobs
 		self.n_boot = n_boot
