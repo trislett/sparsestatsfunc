@@ -20,6 +20,146 @@ base = importr('base')
 spls = importr('spls')
 numpy2ri.activate()
 
+class permute_model_parallel():
+	def __init__(self, n_jobs, n_permutations = 10000):
+		self.n_jobs = n_jobs
+		self.n_permutations = n_permutations
+	def zscaler_XY(self, X, y, axis = 0, ddof = 1, w_mean = True, scale_x = True, scale_y = True):
+		"""
+		Applies scaling to X and y, return means and std regardless
+		"""
+		X_ = np.zeros_like(X)
+		X_[:] = np.copy(X)
+		X_mean_ = np.nanmean(X_, axis)
+		X_std_ = np.nanstd(X_, axis = axis, ddof = ddof)
+		Y_ = np.zeros_like(y)
+		Y_[:] = np.copy(y)
+		Y_mean_ = np.nanmean(Y_, axis)
+		Y_std_ = np.nanstd(Y_, axis = axis, ddof = ddof)
+		if w_mean:
+			X_ -= X_mean_
+			Y_ -= Y_mean_
+		if scale_x:
+			X_ /= X_std_
+		if scale_y:
+			Y_ /= Y_std_
+		return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
+	def index_perm(self, unique_arr, arr, variable, within_perm = True):
+		if within_perm:
+			perm_u = unique_arr
+		else:
+			perm_u = np.random.permutation(unique_arr)
+		out = []
+		for unique in perm_u:
+			if within_perm:
+				out.append(np.random.permutation(variable[unique == arr]))
+			else:
+				out.append(variable[unique == arr])
+		return np.concatenate(out)
+	def fit_model(self, X_Train, Y_Train, X_Test, Y_Test, n_components, group_train):
+		"""
+		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
+		"""
+		X_Train, Y_Train, X_Train_mean, Y_Train_mean, X_Train_std, Y_Train_std = self.zscaler_XY(X = X_Train, y = Y_Train)
+		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = self.zscaler_XY(X = X_Test, y = Y_Test)
+		ugroup_train = np.unique(group_train)
+
+		CV_Q2 = np.zeros((len(ugroup_train)))
+		CV_Q2_roi = np.zeros((len(ugroup_train), Y_Train.shape[1]))
+		CV_Q2_components = np.zeros((len(ugroup_train), n_components))
+		CV_Q2_components_roi = np.zeros((len(ugroup_train), n_components, Y_Train.shape[1]))
+		for g, group in enumerate(ugroup_train):
+			X_gtrain = X_Train[group_train != group]
+			Y_gtrain = Y_Train[group_train != group]
+			X_gtest = X_Train[group_train == group]
+			Y_gtest = Y_Train[group_train == group]
+			pls2 = PLSRegression(n_components = n_components).fit(X_gtrain, Y_gtrain)
+			CV_Q2[g] = explained_variance_score(Y_gtest, pls2.predict(X_gtest))
+			CV_Q2_roi[g] = explained_variance_score(Y_gtest, pls2.predict(X_gtest), multioutput = 'raw_values')
+			for c in range(n_components):
+				yhat_c = np.dot(pls2.x_scores_[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_gtrain.std(axis=0, ddof=1) + Y_gtrain.mean(axis=0)
+				CV_Q2_components[g,c] = explained_variance_score(Y_gtrain, yhat_c)
+				CV_Q2_components_roi[g,c,:] = explained_variance_score(Y_gtrain, yhat_c, multioutput = 'raw_values')
+		self.Q2_train_ = CV_Q2.mean(0)
+		self.Q2_train_targets_ = CV_Q2_roi.mean(0)
+		self.Q2_train_components_ = CV_Q2_components.mean(0)
+		self.Q2_train_components_targets_ = CV_Q2_components_roi.mean(0)
+
+		pls2 = PLSRegression(n_components=N_comp).fit(X_Train, Y_Train)
+		components_variance_explained_train = []
+		components_variance_explained_train_roi = []
+		for c in range(n_components):
+			yhat_c = np.dot(pls2.x_scores_[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_Train_std + Y_Train_mean
+			components_variance_explained_train.append(explained_variance_score(Y_Train, yhat_c))
+			components_variance_explained_train_roi.append(explained_variance_score(Y_Train, yhat_c, multioutput = 'raw_values'))
+		self.R2_train_ = explained_variance_score(Y_Train, pls2.predict(X_Train))
+		self.R2_train_targets_ = explained_variance_score(Y_Train, pls2.predict(X_Train), multioutput = 'raw_values')
+		self.R2_train_components_ = np.array(components_variance_explained_train)
+		self.R2_train_components_targets_ = np.array(components_variance_explained_train_roi)
+		components_variance_explained_test = []
+		components_variance_explained_test_roi = []
+		x_scores_test, y_scores_test = pls2.transform(X_Test, Y_Test)
+		for c in range(n_components):
+			yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_Test.std(axis=0, ddof=1) + Y_Test.mean(axis=0)
+			components_variance_explained_test.append(explained_variance_score(Y_Test, yhat_c))
+			components_variance_explained_test_roi.append(explained_variance_score(Y_Test, yhat_c, multioutput = 'raw_values'))
+		self.R2_test_ = explained_variance_score(Y_Test, pls2.predict(X_Test))
+		self.R2_test_targets_ = explained_variance_score(Y_Test, pls2.predict(X_Test), multioutput = 'raw_values')
+		self.R2_test_components_ = np.array(components_variance_explained_test)
+		self.R2_test_components_targets_ = np.array(components_variance_explained_test_roi)
+		self.n_components_ = n_components
+		self.group_train_ = group_train
+		self.ugroup_train_ = ugroup_train
+		self.X_Train_ = X_Train
+		self.Y_Train_ = Y_Train
+		self.X_Train_mean_ = X_Train_mean
+		self.Y_Train_mean_ = Y_Train_mean
+		self.X_Train_std_ = X_Train_std
+		self.Y_Train_std_ = Y_Train_std
+		self.X_Test_ = X_Test
+		self.Y_Test_ = Y_Test
+		self.X_Test_mean_ = X_Test_mean
+		self.Y_Test_mean_ = Y_Test_mean
+		self.X_Test_std_ = X_Test_std
+		self.Y_Test_std_ = Y_Test_std
+		self.model_obj_ = pls2
+	def permute_function_pls(self, p, compute_targets = False):
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		if p % 200 == 0:
+			print(p)
+		X_perm = self.index_perm(unique_arr = self.ugroup_train_,
+										arr = self.group_train_,
+										variable = self.X_Train_)
+		perm_pls2 = PLSRegression(n_components = self.n_components_).fit(X_perm, self.Y_Train_)
+		x_scores_test = perm_pls2.transform(self.X_Test_)
+		components_ve = np.zeros((self.n_components_))
+		if compute_targets:
+			components_ve_roi = np.zeros((self.n_components_, self.Y_Train_.shape[1]))
+		for c in range(self.n_components_):
+			yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), perm_pls2.y_loadings_[:,c].reshape(-1,1).T) * self.Y_Test_std_ + self.Y_Test_mean_
+			components_ve[c] = explained_variance_score(self.Y_Test_, yhat_c)
+			if compute_targets:
+				components_ve_roi[c, :] = explained_variance_score(self.Y_Test_, yhat_c, multioutput = 'raw_values')
+		ve = explained_variance_score(self.Y_Test_, perm_pls2.predict(self.X_Test_), multioutput = 'raw_values')
+		if compute_targets:
+			ve_roi = explained_variance_score(self.Y_Test_, perm_pls2.predict(self.X_Test_), multioutput = 'raw_values')
+		abs_max_coef = np.max(np.abs(perm_pls2.coef_),1)
+		if compute_targets:
+			return(ve, ve_roi, components_ve, components_ve_roi, abs_max_coef)
+		else:
+			return(ve, components_ve, abs_max_coef)
+	def run_permute_pls(self, compute_targets = False):
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		output = Parallel(n_jobs = self.n_jobs)(delayed(self.permute_function_pls)(p, compute_targets = compute_targets) for p in range(self.n_permutations))
+		if compute_targets:
+			perm_ve, perm_ve_roi, perm_components_ve, perm_components_ve_roi, perm_abs_max_coef = zip(*output)
+			self.perm_R2_test_targets_ = np.array(perm_ve_roi)
+			self.perm_R2_test_components_targets_ = np.array(perm_components_ve_roi)
+		else:
+			perm_ve, perm_components_ve, perm_abs_max_coef = zip(*output)
+		self.perm_R2_test_ = np.array(perm_ve)
+		self.perm_R2_test_components_ = np.array(perm_components_ve)
+		self.perm_coeff_fwer = np.array(perm_abs_max_coef)
 
 class bootstraper_parallel():
 	def __init__(self, n_jobs, n_boot = 1000, split = 0.5):
@@ -372,7 +512,6 @@ class gradient_linear_regression:
 		---------
 		arr : array
 			array with a column of ones
-		
 		"""
 		return np.column_stack([np.ones(len(arr)),arr])
 	def predict(self, X):
@@ -426,8 +565,6 @@ class proximal_gradient_lasso_regression:
 	def predict(self, X):
 		X_ = self.zscaler(X)
 		return(np.dot(X_, self.beta) + self.intercept)
-
-
 
 class ridge_regression:
 	def __init__(self, l = 1.):
