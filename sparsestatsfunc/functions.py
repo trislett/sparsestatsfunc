@@ -21,6 +21,9 @@ spls = importr('spls')
 numpy2ri.activate()
 
 class permute_model_parallel():
+	"""
+	Calculates PLS metrics and significance using sklearn PLSRegression and joblib locky parallelization.
+	"""
 	def __init__(self, n_jobs, n_permutations = 10000):
 		self.n_jobs = n_jobs
 		self.n_permutations = n_permutations
@@ -44,23 +47,21 @@ class permute_model_parallel():
 		if scale_y:
 			Y_ /= Y_std_
 		return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
-
-	def index_perm(self, unique_arr, arr, variable, within_perm = True):
+	def index_perm(self, unique_arr, arr, variable, within_group = True):
 		"""
-		Permutes the 
+		Shuffles an array within group (within_group = True) or the groups (within_group = False)
 		"""
-		if within_perm:
+		if within_group:
 			perm_u = unique_arr
 		else:
 			perm_u = np.random.permutation(unique_arr)
 		out = []
 		for unique in perm_u:
-			if within_perm:
+			if within_group:
 				out.append(np.random.permutation(variable[unique == arr]))
 			else:
 				out.append(variable[unique == arr])
 		return np.concatenate(out)
-
 	def fit_model(self, X_Train, Y_Train, X_Test, Y_Test, n_components, group_train):
 		"""
 		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
@@ -132,8 +133,7 @@ class permute_model_parallel():
 		self.X_Test_std_ = X_Test_std
 		self.Y_Test_std_ = Y_Test_std
 		self.model_obj_ = pls2
-
-	def fwer_corrected_p(self, permuted_arr, target, right_tail_probability = True):
+	def fwer_corrected_p(self, permuted_arr, target, right_tail_probability = True, apply_fwer_correction = True):
 		"""
 		Calculates the FWER corrected p-value
 		
@@ -143,23 +143,35 @@ class permute_model_parallel():
 			Array of permutations [N_permutations, N_factors]
 		target : array or float
 			statistic(s) to check against null array
+		right_tail_probability : bool
+			Use right tail distribution (default: True)
+		apply_fwer_correction : bool
+			If True, output the family-wise error rate across all factors, else output permuted p-value for each factors' distribution (default: True)
 		Returns
 		---------
 		pval_corrected : array
-			Family-wise error rate corrected p-values
+			Family-wise error rate corrected p-values or permuted p-values
 		"""
 		if permuted_arr.ndim == 1:
 			permuted_arr = permuted_arr.reshape(-1,1)
 		if isinstance(target, float):
 			target = np.array([target])
+		assert target.ndim == 1, "Error: target array must be 1D array or float"
 		n_perm, n_factors = permuted_arr.shape
-		pval_corrected = np.zeros((len(target), n_factors))
-		for i in range(n_factors):
-			pval_corrected[:,i] = np.divide(np.searchsorted(np.sort(perm_arr[:,i]), target), n_perm)
+		if apply_fwer_correction: 
+			permuted_arr = permuted_arr.max(1)
+			pval_corrected = np.divide(np.searchsorted(np.sort(permuted_arr), target), n_perm)
+		else:
+			if n_factors == 1:
+				pval_corrected = np.divide(np.searchsorted(np.sort(permuted_arr), target), n_perm)
+			else:
+				assert n_factors == target.shape[0], "Error: n_factors must equal length of target for elementwise comparison"
+				pval_corrected = np.zeros_like(target)
+				for i in range(n_factors):
+					pval_corrected[i] = np.divide(np.searchsorted(np.sort(permuted_arr[:,i]), target[i]), n_perm)
 		if right_tail_probability:
-			pval_corrected -= 1
+			pval_corrected = 1 - pval_corrected
 		return(pval_corrected)
-
 	def permute_function_pls(self, p, compute_targets = False):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		if p % 200 == 0:
@@ -177,7 +189,7 @@ class permute_model_parallel():
 			components_ve[c] = explained_variance_score(self.Y_Test_, yhat_c)
 			if compute_targets:
 				components_ve_roi[c, :] = explained_variance_score(self.Y_Test_, yhat_c, multioutput = 'raw_values')
-		ve = explained_variance_score(self.Y_Test_, perm_pls2.predict(self.X_Test_), multioutput = 'raw_values')
+		ve = explained_variance_score(self.Y_Test_, perm_pls2.predict(self.X_Test_))
 		if compute_targets:
 			ve_roi = explained_variance_score(self.Y_Test_, perm_pls2.predict(self.X_Test_), multioutput = 'raw_values')
 		abs_max_coef = np.max(np.abs(perm_pls2.coef_),1)
@@ -185,7 +197,7 @@ class permute_model_parallel():
 			return(ve, ve_roi, components_ve, components_ve_roi, abs_max_coef)
 		else:
 			return(ve, components_ve, abs_max_coef)
-	def run_permute_pls(self, compute_targets = False):
+	def run_permute_pls(self, compute_targets = True, calulate_pvalues = True):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		output = Parallel(n_jobs = self.n_jobs)(delayed(self.permute_function_pls)(p, compute_targets = compute_targets) for p in range(self.n_permutations))
 		if compute_targets:
@@ -196,7 +208,103 @@ class permute_model_parallel():
 			perm_ve, perm_components_ve, perm_abs_max_coef = zip(*output)
 		self.perm_R2_test_ = np.array(perm_ve)
 		self.perm_R2_test_components_ = np.array(perm_components_ve)
-		self.perm_coeff_fwer = np.array(perm_abs_max_coef)
+		self.perm_coef_fwer_ = np.array(perm_abs_max_coef)
+		if calulate_pvalues:
+			self.compute_permuted_pvalues()
+	def compute_permuted_pvalues(self):
+		"""
+		Calculates p-values (and FWER p-values) using the permuted null distribution.
+		"""
+		assert hasattr(self,'perm_R2_test_'), "Error: no permuted variables. Run run_permute_pls first."
+		if hasattr(self,'perm_R2_test_targets_'):
+			self.pFWER_test_targets_ = self.fwer_corrected_p(self.perm_R2_test_targets_, self.R2_test_targets_)
+			CompFWER = []
+			for c in range(self.n_components_):
+				CompFWER.append(self.fwer_corrected_p(self.perm_R2_test_components_targets_[:,0,:],self.R2_test_components_targets_[c]))
+			self.pFWER_test_components_targets_ = np.array(CompFWER)
+		self.pvalue_R2_test_ = self.fwer_corrected_p(self.perm_R2_test_, self.R2_test_)[0]
+		self.pvalue_R2_test_components_ = self.fwer_corrected_p(self.perm_R2_test_components_, self.R2_test_components_, apply_fwer_correction = False)
+		coef_p = []
+		for co in range(len(self.model_obj_.coef_)):
+			coef_p.append(self.fwer_corrected_p(self.perm_coef_fwer_[:,co], np.abs(self.model_obj_.coef_[co])))
+		self.pFWER_coef_ = np.array(coef_p).T 
+	def plot_model(self, n_jitters = 1000):
+		assert hasattr(self,'pvalue_R2_test_'), "Error: Run compute_permuted_pvalues"
+		if n_jitters > self.n_permutations:
+			n_jitters = self.n_permutations
+		n_plots = self.n_components_ + 1
+		p_num = 1
+		plt.subplots(figsize=(int(2*n_plots), 6), dpi=100, tight_layout = True, sharey='row')
+		plt.subplot(1, n_plots, p_num)
+		jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+		rand_dots = self.perm_R2_test_[:n_jitters]
+		plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+		plt.xlim(-.5, .5)
+		plt.ylabel("R2 predicted vs actual (Test Data)")
+		plt.title("Model")
+		plt.scatter(0, self.R2_test_, marker = 'o', alpha = 1.0, c = 'k')
+		plt.xticks(color='w')
+		p_num += 1
+		x1,x2,y1,y2 = plt.axis()
+		y1 = round(y1,3) - 0.01
+		y2 = round(y2,3) + 0.01
+		plt.ylim(y1, y2)
+		if self.pvalue_R2_test_ == 0:
+			plt.xlabel("R2=%1.3f, P<%1.1e" % (self.R2_test_, (1 / self.n_permutations)), fontsize=10)
+		else:
+			plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_test_, self.pvalue_R2_test_), fontsize=10)
+		for c in range(self.n_components_):
+			plt.subplot(1, n_plots, p_num)
+			jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+			rand_dots = self.perm_R2_test_components_[:n_jitters, c]
+			plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+			plt.xlim(-.5, .5)
+			plt.title("Component %d" % (c+1))
+			plt.scatter(0, self.R2_test_components_[c], marker = 'o', alpha = 1.0, c = 'k')
+			plt.xticks(color='w')
+			plt.ylim(y1, y2)
+			if self.pvalue_R2_test_components_[c] == 0:
+				plt.xlabel("R2=%1.3f, P<%1.1e" % (self.R2_test_components_[c], (1 / self.n_permutations)), fontsize=10)
+			else:
+				plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_test_components_[c], self.pvalue_R2_test_components_[c]), fontsize=10)
+			p_num += 1
+		plt.show()
+	def plot_rmsep_components(self, component_range = np.arange(1,11,1)):
+		full_model_rmse = []
+		full_model_ve = []
+		for i in component_range:
+			pls2 = PLSRegression(n_components=i)
+			pls2.fit(self.X_Train_, self.Y_Train_)
+			Y_proj = pls2.predict(self.X_Train_)
+			score = explained_variance_score(self.Y_Train_, Y_proj)
+			full_model_ve.append(score)
+			full_model_rmse.append(mean_squared_error(self.Y_Train_, Y_proj, squared = False))
+		rmse_cv = []
+		ve_cv = []
+		for i in component_range:
+			rmse_cv_by_subject = []
+			CV_temp_rmse = []
+			CV_temp_ve = []
+			for SITE in uSITES:
+				Y_gtrain = self.Y_Train_[SITES != SITE]
+				Y_gtest = self.Y_Train_[SITES == SITE]
+				X_gtrain = self.X_Train_[SITES != SITE]
+				X_gtest = self.X_Train_[SITES == SITE]
+				pls2 = PLSRegression(n_components=i)
+				pls2.fit(X_gtrain, Y_gtrain)
+				Y_proj = pls2.predict(X_gtest)
+				CV_temp_ve.append(explained_variance_score(Y_gtest, Y_proj))
+				CV_temp_rmse.append(mean_squared_error(Y_gtest, Y_proj, squared = False))
+			rmse_cv.append(np.mean(CV_temp_rmse))
+			ve_cv.append(np.mean(CV_temp_ve))
+		plt.plot(component_range, np.array(full_model_rmse), c = 'b', label = "Model RMSEP")
+		plt.plot(component_range, np.array(rmse_cv), c = 'r', label = "CV RMSEP")
+		plt.legend()
+		plt.show()
+		plt.plot(component_range, np.array(full_model_ve), c = 'k', label = "Model Q2")
+		plt.plot(component_range, np.array(ve_cv), c = 'r', label = "CV Q2")
+		plt.legend()
+		plt.show()
 
 class bootstraper_parallel():
 	def __init__(self, n_jobs, n_boot = 1000, split = 0.5):
