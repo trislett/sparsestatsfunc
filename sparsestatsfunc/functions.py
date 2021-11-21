@@ -44,7 +44,11 @@ class permute_model_parallel():
 		if scale_y:
 			Y_ /= Y_std_
 		return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
+
 	def index_perm(self, unique_arr, arr, variable, within_perm = True):
+		"""
+		Permutes the 
+		"""
 		if within_perm:
 			perm_u = unique_arr
 		else:
@@ -56,6 +60,7 @@ class permute_model_parallel():
 			else:
 				out.append(variable[unique == arr])
 		return np.concatenate(out)
+
 	def fit_model(self, X_Train, Y_Train, X_Test, Y_Test, n_components, group_train):
 		"""
 		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
@@ -64,6 +69,7 @@ class permute_model_parallel():
 		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = self.zscaler_XY(X = X_Test, y = Y_Test)
 		ugroup_train = np.unique(group_train)
 
+		# Calculate Q2 squared
 		CV_Q2 = np.zeros((len(ugroup_train)))
 		CV_Q2_roi = np.zeros((len(ugroup_train), Y_Train.shape[1]))
 		CV_Q2_components = np.zeros((len(ugroup_train), n_components))
@@ -85,7 +91,8 @@ class permute_model_parallel():
 		self.Q2_train_components_ = CV_Q2_components.mean(0)
 		self.Q2_train_components_targets_ = CV_Q2_components_roi.mean(0)
 
-		pls2 = PLSRegression(n_components=N_comp).fit(X_Train, Y_Train)
+		# Calculate R2 squared for training data
+		pls2 = PLSRegression(n_components = n_components).fit(X_Train, Y_Train)
 		components_variance_explained_train = []
 		components_variance_explained_train_roi = []
 		for c in range(n_components):
@@ -96,6 +103,8 @@ class permute_model_parallel():
 		self.R2_train_targets_ = explained_variance_score(Y_Train, pls2.predict(X_Train), multioutput = 'raw_values')
 		self.R2_train_components_ = np.array(components_variance_explained_train)
 		self.R2_train_components_targets_ = np.array(components_variance_explained_train_roi)
+
+		# Calculate R2P squared for test data
 		components_variance_explained_test = []
 		components_variance_explained_test_roi = []
 		x_scores_test, y_scores_test = pls2.transform(X_Test, Y_Test)
@@ -123,6 +132,34 @@ class permute_model_parallel():
 		self.X_Test_std_ = X_Test_std
 		self.Y_Test_std_ = Y_Test_std
 		self.model_obj_ = pls2
+
+	def fwer_corrected_p(self, permuted_arr, target, right_tail_probability = True):
+		"""
+		Calculates the FWER corrected p-value
+		
+		Parameters
+		----------
+		permuted_arr : array
+			Array of permutations [N_permutations, N_factors]
+		target : array or float
+			statistic(s) to check against null array
+		Returns
+		---------
+		pval_corrected : array
+			Family-wise error rate corrected p-values
+		"""
+		if permuted_arr.ndim == 1:
+			permuted_arr = permuted_arr.reshape(-1,1)
+		if isinstance(target, float):
+			target = np.array([target])
+		n_perm, n_factors = permuted_arr.shape
+		pval_corrected = np.zeros((len(target), n_factors))
+		for i in range(n_factors):
+			pval_corrected[:,i] = np.divide(np.searchsorted(np.sort(perm_arr[:,i]), target), n_perm)
+		if right_tail_probability:
+			pval_corrected -= 1
+		return(pval_corrected)
+
 	def permute_function_pls(self, p, compute_targets = False):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		if p % 200 == 0:
