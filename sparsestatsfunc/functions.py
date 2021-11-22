@@ -13,14 +13,17 @@ from sklearn.cross_decomposition import PLSRegression
 from rpy2.robjects import numpy2ri
 from rpy2.robjects.packages import importr
 
+# suppress console because of weird permission around r
+import warnings
+from rpy2.rinterface import RRuntimeWarning
+warnings.filterwarnings("ignore", category=RRuntimeWarning)
+
 from sparsestatsfunc.cynumstats import cy_lin_lstsqr_mat_residual, cy_lin_lstsqr_mat, fast_se_of_slope, tval_fast
 
 stats = importr('stats')
 base = importr('base')
 spls = importr('spls')
 utils = importr('utils')
-# suppress console because of weird permission around r
-base.sink("/dev/null")
 
 numpy2ri.activate()
 
