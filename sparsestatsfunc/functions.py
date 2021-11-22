@@ -406,12 +406,15 @@ class bootstraper_parallel():
 			self.best_eta_ = self.search_eta_range_[xy.mean(1) > 0]
 		if print_optimal_values:
 			print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
+
 	def plot_cv_params_search_spls(self, nan_unstable = True):
 		assert hasattr(self,'best_eta_'), "Error: run cv_params_search_spls"
+		
+		#Q2
 		Q2_SEARCH = self.Q2_SEARCH_
 		if nan_unstable:
 			Q2_SEARCH[Q2_SEARCH < 0] = np.nan
-		plt.imshow(self.Q2_SEARCH_, interpolation = None, cmap='jet')
+		plt.imshow(Q2_SEARCH, interpolation = None, cmap='jet')
 		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
 		plt.ylabel('eta (sparsity)')
 		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
@@ -419,6 +422,31 @@ class bootstraper_parallel():
 		plt.colorbar()
 		plt.title("Q-Squared [CV]")
 		plt.show()
+
+		Q2_SEARCH_SD = self.Q2_SEARCH_SD_
+		if nan_unstable:
+			Q2_SEARCH_SD[Q2_SEARCH < 0] = np.nan
+		plt.imshow(Q2_SEARCH_SD, interpolation = None, cmap='jet_r')
+		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
+		plt.ylabel('eta (sparsity)')
+		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
+		plt.xlabel('Components')
+		plt.colorbar()
+		plt.title("Q-Squared [CV] St. Dev.")
+		plt.show()
+
+		Q2_SEARCH_RATIO = np.divide(self.Q2_SEARCH_, self.Q2_SEARCH_SD_)
+		if nan_unstable:
+			Q2_SEARCH_RATIO[Q2_SEARCH < 0] = np.nan
+		plt.imshow(Q2_SEARCH_RATIO, interpolation = None, cmap='jet')
+		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
+		plt.ylabel('eta (sparsity)')
+		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
+		plt.xlabel('Components')
+		plt.colorbar()
+		plt.title("Q-Squared [CV] / St. Dev.")
+		plt.show()
+
 		RMSEP_CV_SEARCH = self.RMSEP_CV_SEARCH_
 		if nan_unstable:
 			RMSEP_CV_SEARCH[RMSEP_CV_SEARCH > 1] = np.nan
