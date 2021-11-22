@@ -300,11 +300,11 @@ class permute_model_parallel():
 			rmse_cv_by_subject = []
 			CV_temp_rmse = []
 			CV_temp_ve = []
-			for SITE in uSITES:
-				Y_gtrain = self.Y_Train_[SITES != SITE]
-				Y_gtest = self.Y_Train_[SITES == SITE]
-				X_gtrain = self.X_Train_[SITES != SITE]
-				X_gtest = self.X_Train_[SITES == SITE]
+			for group in self.ugroup_train_:
+				Y_gtrain = self.Y_Train_[self.group_train_ != group]
+				Y_gtest = self.Y_Train_[self.group_train_ == group]
+				X_gtrain = self.X_Train_[self.group_train_ != group]
+				X_gtest = self.X_Train_[self.group_train_ == group]
 				pls2 = PLSRegression(n_components=i)
 				pls2.fit(X_gtrain, Y_gtrain)
 				Y_proj = pls2.predict(X_gtest)
@@ -316,7 +316,7 @@ class permute_model_parallel():
 		plt.plot(component_range, np.array(rmse_cv), c = 'r', label = "CV RMSEP")
 		plt.legend()
 		plt.show()
-		plt.plot(component_range, np.array(full_model_ve), c = 'k', label = "Model Q2")
+		plt.plot(component_range, np.array(full_model_ve), c = 'k', label = "Model R2")
 		plt.plot(component_range, np.array(ve_cv), c = 'r', label = "CV Q2")
 		plt.legend()
 		plt.show()
