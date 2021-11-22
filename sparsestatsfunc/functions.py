@@ -62,6 +62,21 @@ class permute_model_parallel():
 			else:
 				out.append(variable[unique == arr])
 		return np.concatenate(out)
+	def check_variables(self, X_Train, Y_Train, X_Test, Y_Test):
+		X_Train, Y_Train, X_Train_mean, Y_Train_mean, X_Train_std, Y_Train_std = self.zscaler_XY(X = X_Train, y = Y_Train)
+		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = self.zscaler_XY(X = X_Test, y = Y_Test)
+		has_issue = False
+		if np.sum((X_Train_std == 0)*1) != 0:
+			print("Warning: zero standard deviation predictors detected in Training data. Printing index array")
+			print((X_Train_std != 0)*1)
+			has_issue = True
+		if np.sum((X_Test_std == 0)*1) != 0:
+			print("Warning: zero standard deviation predictors detect in Testing data. Printing index array")
+			print((X_Test_std != 0)*1)
+			has_issue = True
+		outindex = (X_Test_std != 0) * (X_Train_std != 0)
+		return(outindex)
+
 	def fit_model(self, X_Train, Y_Train, X_Test, Y_Test, n_components, group_train):
 		"""
 		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
@@ -413,7 +428,7 @@ class bootstraper_parallel():
 		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
 		plt.xlabel('Components')
 		plt.colorbar()
-		plt.title("RMSEP-Squared [CV]")
+		plt.title("RMSEP [CV]")
 		plt.show()
 	def bootstrap_spls(self, i, X, y, n_comp, group, split, eta):
 		if i % 100 == 0: 
