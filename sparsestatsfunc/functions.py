@@ -534,9 +534,20 @@ class bootstraper_parallel():
 		self.search_thresholds_ = search_array
 	def plot_cv_search_array(self):
 		assert hasattr(self,'search_thresholds_'), "Error: run cv_search_array"
+		isvalid_sd = np.zeros((len(self.search_thresholds_)), dtype = bool)
+		for i, s in enumerate(self.search_thresholds_):
+			selection_mask = self.selected_vars_mean_ > s
+			CV_temp_rmse = []
+			CV_temp_ve = []
+			X_SEL = self.X[:,selection_mask]
+			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
+				isvalid_sd[i] = True
+		isvalid_sd[self.Q2_SD_ > 1] = False
 		Xthresholds = self.search_thresholds_
-		plt.plot(Xthresholds, self.Q2_, color='blue')
-		plt.fill_between(Xthresholds, self.Q2_-self.Q2_SD_, self.Q2_+self.Q2_SD_, alpha=0.5, edgecolor='blue', facecolor='lightsteelblue', linestyle=":")
+		Q2_values = self.Q2_
+		Q2_values[Q2_values < 0] = 0 
+		plt.plot(Xthresholds, Q2_values, color='blue')
+		plt.fill_between(Xthresholds[isvalid_sd], self.Q2_[isvalid_sd]-self.Q2_SD_[isvalid_sd], self.Q2_[isvalid_sd]+self.Q2_SD_[isvalid_sd], alpha=0.5, edgecolor='blue', facecolor='lightsteelblue', linestyle=":")
 		plt.ylabel('Q-Squared')
 		plt.xlabel('Selection Threshold')
 		plt.xticks(Xthresholds, [s[:4] for s in np.round(Xthresholds,3).astype(str)])
