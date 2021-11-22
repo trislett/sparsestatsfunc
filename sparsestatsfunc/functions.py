@@ -18,6 +18,10 @@ from sparsestatsfunc.cynumstats import cy_lin_lstsqr_mat_residual, cy_lin_lstsqr
 stats = importr('stats')
 base = importr('base')
 spls = importr('spls')
+utils = importr('utils')
+# suppress console because of weird permission around r
+base.sink("/dev/null")
+
 numpy2ri.activate()
 
 class permute_model_parallel():
@@ -356,9 +360,9 @@ class bootstraper_parallel():
 					# kick out effective zero predictors
 					X_test = X_test[:,X_train.std(0) > 0.0001]
 					X_train = X_train[:,X_train.std(0) > 0.0001]
-					spls = spls_rwrapper(n_components = K, eta = eta)
-					spls.fit(X_train, Y_train)
-					Y_proj = spls.predict(X_test)
+					spls2 = spls_rwrapper(n_components = K, eta = eta)
+					spls2.fit(X_train, Y_train)
+					Y_proj = spls2.predict(X_test)
 					temp_Q2.append(explained_variance_score(Y_test, Y_proj))
 					temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
 				cQ2_SEARCH[e] = np.mean(temp_Q2)
