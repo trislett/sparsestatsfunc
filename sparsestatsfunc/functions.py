@@ -83,7 +83,6 @@ class permute_model_parallel():
 			has_issue = True
 		outindex = (X_Test_std != 0) * (X_Train_std != 0)
 		return(outindex)
-
 	def fit_model(self, X_Train, Y_Train, X_Test, Y_Test, n_components, group_train):
 		"""
 		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
@@ -333,6 +332,103 @@ class bootstraper_parallel():
 		self.n_jobs = n_jobs
 		self.n_boot = n_boot
 		self.split = split
+	def nfoldsplit_group(self, group, n_fold = 5, holdout = 0, train_index = None, verbose = False, debug_verbose = False):
+		"""
+		Creates indexed array(s) for k-fold cross validation with holdout option for test data. The ratio of the groups are maintained. To reshuffle the training, if can be passed back through via index_train.
+		The indices are always based on the original grouping variable. i.e., the orignal data.
+		
+		Parameters
+		----------
+		group : array
+			List array with length of number of subjects. 
+		n_fold : int
+			The number of folds
+		holdout : float
+			The amount of data to holdout ranging from 0 to <1. A reasonable holdout is around 0.3 or 30 percent. If holdout = None, then returns test_index = None. (default = 0)
+		train_index : array
+			Indexed array of training data. Holdout must be zero (holdout = 0). It is useful for re-shuffling the fold indices or changing the number of folds.
+		verbose : bool
+			Prints out the splits and some basic information
+		debug_verbose: bool
+			Prints out the indices by group
+		Returns
+		---------
+		train_index : array
+			index array of training data
+		fold_indices : object
+			the index array for each fold (n_folds, training_fold_size)
+		test_index : array or None
+			index array of test data
+		"""
+		test_index = None
+		original_group = group[:]
+		ugroup = np.unique(group)
+		lengroup = len(group)
+		indices = np.arange(0,lengroup,1)
+		if holdout != 0:
+			assert holdout < 1., "Error: Holdout ratio must be >0 and <1.0. Try .3"
+			assert train_index is None, "Error: train index already exists."
+			indx_0 = []
+			indx_1 = []
+			for g in ugroup:
+				pg = np.random.permutation(indices[group==g])
+				indx_0.append(pg[:int(len(pg)*holdout)])
+				indx_1.append(pg[int(len(pg)*holdout):])
+			train_index = np.concatenate(indx_1)
+			test_index = np.concatenate(indx_0)
+			group = group[train_index]
+			if verbose:
+				print("Train data size = %s, Test data size = %s [holdout = %1.2f]" %(len(train_index), len(test_index), holdout))
+		else:
+			if train_index is None:
+				train_index = indices[:]
+			else:
+				group = group[train_index]
+		# reshuffle for good luck
+		gsize = []
+		shuffle_train = []
+		for g in ugroup:
+			pg = np.random.permutation(train_index[group==g])
+			gsize.append(len(pg))
+			shuffle_train.append(pg)
+		train_index = np.concatenate(shuffle_train)
+		group = original_group[train_index]
+		split_sizes = np.divide(gsize, n_fold).astype(int)
+		if verbose:
+			for s in range(len(ugroup)):
+				print("Training group [%s]: size n=%d, split size = %d, remainder = %d" % (ugroup[s], gsize[s], split_sizes[s], int(gsize[s] % split_sizes[s])))
+			if test_index is not None:
+				for s in range(len(ugroup)):
+					original_group[test_index] == ugroup[s]
+					test_size = np.sum((original_group[test_index] == ugroup[s])*1)
+					print("Test group [%s]: size n=%d, holdout percentage = %1.2f" % (ugroup[s], test_size, np.divide(test_size * 100, test_size+gsize[s])))
+		fold_indices = []
+		for n in range(n_fold):
+			temp_index = []
+			for i, g in enumerate(ugroup):
+				temp = train_index[group==g]
+				if n == n_fold-1:
+					temp_index.append(temp[n*split_sizes[i]:])
+				else:
+					temp_index.append(temp[n*split_sizes[i]:((n+1)*split_sizes[i])])
+				if debug_verbose:
+					print(n)
+					print(g)
+					print(original_group[temp_index[-1]])
+					print(temp_index[-1])
+			fold_indices.append(np.concatenate(temp_index))
+		train_index = np.sort(train_index)
+		fold_indices = np.array(fold_indices, dtype = object)
+		if holdout != 0:
+			test_index = np.sort(test_index)
+		if verbose:
+			for i in range(n_fold):
+				print("\nFOLD %d:" % (i+1))
+				print(np.sort(original_group[fold_indices[i]]))
+			if test_index is not None:
+				print("\nTEST:" )
+				print(np.sort(original_group[test_index]))
+		return(train_index, fold_indices, test_index)
 	def bootstrap_by_group(self, group, split = 0.5):
 		ugroup = np.unique(group)
 		lengroup = len(group)
