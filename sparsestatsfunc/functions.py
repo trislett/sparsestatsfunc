@@ -428,7 +428,7 @@ class bootstraper_parallel():
 			if test_index is not None:
 				print("\nTEST:" )
 				print(np.sort(original_group[test_index]))
-		return(train_index, fold_indices, test_index)
+		return(fold_indices, train_index, test_index)
 	def bootstrap_by_group(self, group, split = 0.5):
 		ugroup = np.unique(group)
 		lengroup = len(group)
@@ -440,7 +440,120 @@ class bootstraper_parallel():
 			indx_0.append(pg[:int(len(pg)*split)])
 			indx_1.append(pg[int(len(pg)*split):])
 		return(np.concatenate(indx_0), np.concatenate(indx_1))
-	def par_params_searcher(self, c, X, y, group, eta_range = np.arange(.1,1.,.1)):
+	def create_nfold(self, X, y, group, n_fold = 5, holdout = 0.3, verbose = True):
+		"""
+		Imports the data and runs nfoldsplit_group.
+		"""
+		fold_indices, train_index, test_index  = self.nfoldsplit_group(group = group,
+																							n_fold = n_fold,
+																							holdout = holdout,
+																							train_index = None,
+																							verbose = verbose,
+																							debug_verbose = False)
+		X_train = X[train_index]
+		y_train = y[train_index]
+		if test_index is not None:
+			X_test= X[test_index]
+			y_test= y[test_index]
+		self.train_index_ = train_index
+		self.fold_indices_ = fold_indices
+		self.test_index_ = test_index
+		self.X_ = X
+		self.y_ = y
+		self.group_ = group
+		self.n_fold_ = n_fold
+		self.X_train_ = X_train
+		self.y_train_ = y_train
+		self.X_test_ = X_test
+		self.y_test_ = y_test
+	def nfold_params_search(self, c, X, y, group, train_index, fold_indices, eta_range = np.arange(.1,1.,.1), n_reshuffle = 1):
+		"""
+		"""
+		n_fold = len(fold_indices)
+		fold_index = np.arange(0,n_fold,1)
+		nspls_runs = n_fold*n_reshuffle
+		K = c + 1
+		cQ2_SEARCH = np.zeros((len(eta_range)))
+		cQ2_SEARCH_SD = np.zeros((len(eta_range)))
+		cRMSEP_CV_SEARCH = np.zeros((len(eta_range)))
+		cRMSEP_CV_SEARCH_SD = np.zeros((len(eta_range)))
+		for e, eta in enumerate(eta_range):
+			temp_Q2 = np.zeros((nspls_runs))
+			temp_rmse = np.zeros((nspls_runs))
+			if ((K+1) < X[train_index].shape[1]) and (y[train_index].shape[1] > (K+1)):
+				p = 0
+				for i in range(n_reshuffle):
+					if n_reshuffle > 1:
+						fold_indices, _, _ = self.nfoldsplit_group(group = group,
+																			n_fold = n_fold,
+																			holdout = 0,
+																			train_index = train_index,
+																			verbose = False,
+																			debug_verbose = False)
+					for n in range(n_fold):
+						sel_train = fold_indices[n]
+						sel_test = np.concatenate(fold_indices[fold_index != n])
+						tmpX_train = X[sel_train]
+						tmpY_train = y[sel_train]
+						tmpX_test = X[sel_test]
+						tmpY_test = y[sel_test]
+						# kick out effective zero predictors
+						tmpX_test = tmpX_test[:,tmpX_train.std(0) > 0.0001]
+						tmpX_train = tmpX_train[:,tmpX_train.std(0) > 0.0001]
+						spls2 = spls_rwrapper(n_components = K, eta = eta)
+						spls2.fit(tmpX_train, tmpY_train)
+						Y_proj = spls2.predict(tmpX_test)
+						temp_Q2[p] = explained_variance_score(tmpY_test, Y_proj)
+						temp_rmse[p] = mean_squared_error(tmpY_test, Y_proj, squared = False)
+						p += 1
+				cQ2_SEARCH[e] = np.mean(temp_Q2)
+				cQ2_SEARCH_SD[e] = np.std(temp_Q2)
+				cRMSEP_CV_SEARCH[e] = np.mean(temp_rmse)
+				cRMSEP_CV_SEARCH_SD[e] = np.std(temp_rmse)
+			else:
+				cQ2_SEARCH[e] = 0
+				cQ2_SEARCH_SD[e] = 0
+				cRMSEP_CV_SEARCH[e] = 1
+				cRMSEP_CV_SEARCH_SD[e] = 1
+		print("Component %d finished" % K)
+		return(c, cQ2_SEARCH, cQ2_SEARCH_SD, cRMSEP_CV_SEARCH, cRMSEP_CV_SEARCH_SD)
+	def nfold_cv_params_search_spls(self, eta_range = np.arange(.1,1.,.1), n_reshuffle = 1, max_n_comp = 10):
+		assert hasattr(self,'fold_indices_'), "Error: No fold indices. Run create_nfold first"
+		assert isinstance(n_reshuffle, (int, np.integer)), "Error: n_reshuffle must be an interger"
+		# parallel by max_n_comp
+		output = Parallel(n_jobs=min(self.n_jobs,max_n_comp), backend='multiprocessing')(delayed(self.nfold_params_search)(c, X = self.X_, y = self.y_, group = self.group_, train_index = self.train_index_, fold_indices = self.fold_indices_, eta_range = eta_range, n_reshuffle = n_reshuffle) for c in range(max_n_comp))
+		ord_k, Q2_SEARCH, Q2_SEARCH_SD, RMSEP_CV_SEARCH, RMSEP_CV_SEARCH_SD = zip(*output)
+		ord_k = np.array(ord_k)
+		Q2_SEARCH = np.row_stack(Q2_SEARCH)[ord_k]
+		Q2_SEARCH_SD = np.row_stack(Q2_SEARCH_SD)[ord_k]
+		RMSEP_CV_SEARCH = np.row_stack(RMSEP_CV_SEARCH)[ord_k]
+		RMSEP_CV_SEARCH_SD = np.row_stack(RMSEP_CV_SEARCH_SD)[ord_k]
+		# re-ordering stuff Comp [low to high], Eta [low to high]
+		self.Q2_SEARCH_ = Q2_SEARCH.T
+		self.Q2_SEARCH_SD_ = Q2_SEARCH_SD.T
+		self.RMSEP_CV_SEARCH_ = RMSEP_CV_SEARCH.T
+		self.RMSEP_CV_SEARCH_SD_ = RMSEP_CV_SEARCH_SD.T
+		self.search_eta_range_ = eta_range[::-1]
+		self.max_n_comp_ = max_n_comp
+		xy = (self.RMSEP_CV_SEARCH_ == np.nanmin(self.RMSEP_CV_SEARCH_))*1
+		print_optimal_values = True
+		try:
+			self.best_K_ = int(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
+		except:
+			print_optimal_values = False
+			print("Warning: multiple components have the best value.")
+			print(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
+			self.best_K_ = np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0]
+		try:
+			self.best_eta_ = float(self.search_eta_range_[xy.mean(1) > 0])
+		except:
+			print_optimal_values = False
+			print("Warning: multiple sparsity thresholds have the best value.")
+			print(self.search_eta_range_[xy.mean(1) > 0])
+			self.best_eta_ = self.search_eta_range_[xy.mean(1) > 0]
+		if print_optimal_values:
+			print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
+	def group_params_searcher(self, c, X, y, group, eta_range = np.arange(.1,1.,.1)):
 		K = c + 1
 		ugroup = np.unique(group)
 		cQ2_SEARCH = np.zeros((len(eta_range)))
@@ -475,9 +588,9 @@ class bootstraper_parallel():
 				cRMSEP_CV_SEARCH_SD[e] = 1
 		print("Component %d finished" % K)
 		return(c, cQ2_SEARCH, cQ2_SEARCH_SD, cRMSEP_CV_SEARCH, cRMSEP_CV_SEARCH_SD)
-	def cv_params_search_spls(self, X, y, group, eta_range = np.arange(.1,1.,.1), max_n_comp = 10):
+	def group_cv_params_search_spls(self, X, y, group, eta_range = np.arange(.1,1.,.1), max_n_comp = 10):
 		# parallel by max_n_comp
-		output = Parallel(n_jobs=min(self.n_jobs,max_n_comp))(delayed(self.par_params_searcher)(c, X = X, y = y, group = group, eta_range = eta_range) for c in range(max_n_comp))
+		output = Parallel(n_jobs=min(self.n_jobs,max_n_comp))(delayed(self.group_params_searcher)(c, X = X, y = y, group = group, eta_range = eta_range) for c in range(max_n_comp))
 		ord_k, Q2_SEARCH, Q2_SEARCH_SD, RMSEP_CV_SEARCH, RMSEP_CV_SEARCH_SD = zip(*output)
 		ord_k = np.array(ord_k)
 		Q2_SEARCH = np.row_stack(Q2_SEARCH)[ord_k]
@@ -573,16 +686,72 @@ class bootstraper_parallel():
 		selector[boot_spls2.selectedvariablesindex_] = 1
 		return(selector)
 	def run_bootstrap_spls(self, X, y, n_comp, group, eta, split = 0.5):
-		selected_vars = Parallel(n_jobs=self.n_jobs)(delayed(self.bootstrap_spls)(i, X = X, y = y, n_comp = n_comp, group = group, split = self.split, eta = eta) for i in range(self.n_boot))
+		selected_vars = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.bootstrap_spls)(i, X = X, y = y, n_comp = n_comp, group = group, split = self.split, eta = eta) for i in range(self.n_boot))
 		self.selected_vars_ = np.array(selected_vars)
 		self.selected_vars_mean_ = np.mean(selected_vars, 0)
-		self.X = X
+		self.X = X  # I need to fix this
 		self.y = y
 		self.n_comp = n_comp
 		self.eta = eta
 		self.split = split
 		self.group = group
 		self.ugroup = np.unique(group)
+	def nfold_cv_search_array(self, search_array = np.arange(.2,1.,.05)):
+		assert hasattr(self,'selected_vars_mean_'), "Error: bootstrap parallel is missing"
+		ve_cv = []
+		rmse_cv = []
+		ve_cv_std = []
+		rmse_cv_std = []
+		full_model_ve = []
+		full_model_rmse = []
+		n_fold = len(self.fold_indices_)
+		fold_index = np.arange(0,n_fold,1)
+		for s in search_array:
+			print(np.round(s,3))
+			selection_mask = self.selected_vars_mean_ > s
+			CV_temp_rmse = []
+			CV_temp_ve = []
+			X_SEL = self.X_[:,selection_mask]
+			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
+				for n in range(self.n_fold_):
+					sel_train = self.fold_indices_[n]
+					sel_test = np.concatenate(self.fold_indices_[fold_index != n])
+					X_train =X_SEL[sel_train]
+					Y_train = self.y_[sel_train]
+					X_test = X_SEL[sel_test]
+					Y_test = self.y_[sel_test]
+					pls2 = PLSRegression(n_components=self.n_comp).fit(X_train, Y_train)
+					Y_proj = pls2.predict(X_test)
+					score = explained_variance_score(Y_test, Y_proj)
+					print("FOLD %d : %1.3f" % (n, score))
+					CV_temp_ve.append(score)
+					CV_temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
+				print("CV MODEL : %1.3f +/- %1.3f" % (np.mean(CV_temp_ve), np.std(CV_temp_ve)))
+				rmse_cv.append(np.mean(CV_temp_rmse))
+				ve_cv.append(np.mean(CV_temp_ve))
+				rmse_cv_std.append(np.std(CV_temp_rmse))
+				ve_cv_std.append(np.std(CV_temp_ve))
+				# full model
+				pls2 = PLSRegression(n_components=self.n_comp).fit(X_SEL, self.y_)
+				Y_proj = pls2.predict(X_SEL)
+				score = explained_variance_score(self.y_, Y_proj)
+				print("MODEL : %1.3f" % (score))
+				full_model_ve.append(score)
+				full_model_rmse.append(mean_squared_error(self.y_, Y_proj, squared = False))
+			else:
+				rmse_cv.append(0.)
+				ve_cv.append(0.)
+				rmse_cv_std.append(0.)
+				ve_cv_std.append(0.)
+				full_model_ve.append(0.)
+				full_model_rmse.append(0.)
+		self.RMSEP_CV_ = np.array(rmse_cv)
+		self.Q2_ = np.array(ve_cv)
+		self.RMSEP_CV_SD_ = np.array(rmse_cv_std)
+		self.Q2_SD_ = np.array(ve_cv_std)
+		self.RMSEP_LEARN_ = np.array(full_model_rmse)
+		self.R2_LEARN_ = np.array(full_model_ve)
+		self.search_thresholds_ = search_array
 	def cv_search_array(self, search_array = np.arange(.2,1.,.05)):
 		assert hasattr(self,'selected_vars_mean_'), "Error: bootstrap parallel is missing"
 		ve_cv = []
@@ -656,9 +825,6 @@ class bootstraper_parallel():
 		plt.xticks(Xthresholds, [s[:4] for s in np.round(Xthresholds,3).astype(str)])
 		plt.title("sPLS Model: Components = %d, eta = %1.2f, n_boot = %d" % (self.n_comp, self.eta, self.n_boot))
 		plt.show()
-
-
-
 class spls_rwrapper:
 	"""
 	Wrapper that uses the spls r package, and rpy2
