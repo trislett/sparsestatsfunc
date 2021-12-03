@@ -109,8 +109,10 @@ class permute_model_parallel():
 				CV_Q2_components[g,c] = explained_variance_score(Y_gtrain, yhat_c)
 				CV_Q2_components_roi[g,c,:] = explained_variance_score(Y_gtrain, yhat_c, multioutput = 'raw_values')
 		self.Q2_train_ = CV_Q2.mean(0)
+		self.Q2_train_std_ = CV_Q2.std(0)
 		self.Q2_train_targets_ = CV_Q2_roi.mean(0)
 		self.Q2_train_components_ = CV_Q2_components.mean(0)
+		self.Q2_train_components_std_ = CV_Q2_components.std(0)
 		self.Q2_train_components_targets_ = CV_Q2_components_roi.mean(0)
 
 		# Calculate R2 squared for training data
@@ -249,7 +251,7 @@ class permute_model_parallel():
 		for co in range(len(self.model_obj_.coef_)):
 			coef_p.append(self.fwer_corrected_p(self.perm_coef_fwer_[:,co], np.abs(self.model_obj_.coef_[co])))
 		self.pFWER_coef_ = np.array(coef_p).T 
-	def plot_model(self, n_jitters = 1000):
+	def plot_model(self, n_jitters = 1000, png_basename = None, add_Q2_from_train = False):
 		assert hasattr(self,'pvalue_R2_test_'), "Error: Run compute_permuted_pvalues"
 		if n_jitters > self.n_permutations:
 			n_jitters = self.n_permutations
@@ -264,6 +266,8 @@ class permute_model_parallel():
 		plt.ylabel("R2 predicted vs actual (Test Data)")
 		plt.title("Model")
 		plt.scatter(0, self.R2_test_, marker = 'o', alpha = 1.0, c = 'k')
+		if add_Q2_from_train:
+			plt.errorbar(0.1, self.Q2_train_, self.Q2_train_std_, linestyle='None', marker='.', c = 'r', alpha = 0.5)
 		plt.xticks(color='w')
 		p_num += 1
 		x1,x2,y1,y2 = plt.axis()
@@ -282,6 +286,8 @@ class permute_model_parallel():
 			plt.xlim(-.5, .5)
 			plt.title("Component %d" % (c+1))
 			plt.scatter(0, self.R2_test_components_[c], marker = 'o', alpha = 1.0, c = 'k')
+			if add_Q2_from_train:
+				plt.errorbar(0.1, self.Q2_train_components_[c], self.Q2_train_components_std_[c], linestyle='None', marker='.', c = 'r', alpha = 0.5)
 			plt.xticks(color='w')
 			plt.ylim(y1, y2)
 			if self.pvalue_R2_test_components_[c] == 0:
@@ -289,8 +295,12 @@ class permute_model_parallel():
 			else:
 				plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_test_components_[c], self.pvalue_R2_test_components_[c]), fontsize=10)
 			p_num += 1
-		plt.show()
-	def plot_rmsep_components(self, component_range = np.arange(1,11,1)):
+		if png_basename is not None:
+			plt.savefig("%s_model_fit_to_test_with_null.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+	def plot_rmsep_components(self, component_range = np.arange(1,11,1), png_basename = None):
 		full_model_rmse = []
 		full_model_ve = []
 		for i in component_range:
@@ -321,11 +331,19 @@ class permute_model_parallel():
 		plt.plot(component_range, np.array(full_model_rmse), c = 'b', label = "Model RMSEP")
 		plt.plot(component_range, np.array(rmse_cv), c = 'r', label = "CV RMSEP")
 		plt.legend()
-		plt.show()
+		if png_basename is not None:
+			plt.savefig("%s_rmse_versus_component_number.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
 		plt.plot(component_range, np.array(full_model_ve), c = 'k', label = "Model R2")
 		plt.plot(component_range, np.array(ve_cv), c = 'r', label = "CV Q2")
 		plt.legend()
-		plt.show()
+		if png_basename is not None:
+			plt.savefig("%s_R2_versus_component_number.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
 
 class bootstraper_parallel():
 	def __init__(self, n_jobs, n_boot = 1000, split = 0.5):
@@ -623,13 +641,15 @@ class bootstraper_parallel():
 		if print_optimal_values:
 			print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
 
-	def plot_cv_params_search_spls(self, nan_unstable = True):
+	def plot_cv_params_search_spls(self, nan_unstable = False, png_basename = None):
 		assert hasattr(self,'best_eta_'), "Error: run cv_params_search_spls"
 		
 		#Q2
 		Q2_SEARCH = self.Q2_SEARCH_
 		if nan_unstable:
 			Q2_SEARCH[Q2_SEARCH < 0] = np.nan
+		else:
+			Q2_SEARCH[Q2_SEARCH < 0] = 0
 		plt.imshow(Q2_SEARCH, interpolation = None, cmap='jet')
 		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
 		plt.ylabel('eta (sparsity)')
@@ -637,11 +657,17 @@ class bootstraper_parallel():
 		plt.xlabel('Components')
 		plt.colorbar()
 		plt.title("Q-Squared [CV]")
-		plt.show()
+		if png_basename is not None:
+			plt.savefig("%s_feature_selection_Q2.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
 
+		Q2_SEARCH = self.Q2_SEARCH_
 		Q2_SEARCH_SD = self.Q2_SEARCH_SD_
 		if nan_unstable:
 			Q2_SEARCH_SD[Q2_SEARCH < 0] = np.nan
+		plt.imshow(Q2_SEARCH, interpolation = None, cmap='jet')
 		plt.imshow(Q2_SEARCH_SD, interpolation = None, cmap='jet_r')
 		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
 		plt.ylabel('eta (sparsity)')
@@ -649,11 +675,17 @@ class bootstraper_parallel():
 		plt.xlabel('Components')
 		plt.colorbar()
 		plt.title("Q-Squared [CV] St. Dev.")
-		plt.show()
+		if png_basename is not None:
+			plt.savefig("%s_feature_selection_Q2_SD.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
 
 		Q2_SEARCH_RATIO = np.divide(self.Q2_SEARCH_, self.Q2_SEARCH_SD_)
 		if nan_unstable:
 			Q2_SEARCH_RATIO[Q2_SEARCH < 0] = np.nan
+		else:
+			Q2_SEARCH_RATIO[Q2_SEARCH < 0] = 0
 		plt.imshow(Q2_SEARCH_RATIO, interpolation = None, cmap='jet')
 		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
 		plt.ylabel('eta (sparsity)')
@@ -661,11 +693,17 @@ class bootstraper_parallel():
 		plt.xlabel('Components')
 		plt.colorbar()
 		plt.title("Q-Squared [CV] / St. Dev.")
-		plt.show()
+		if png_basename is not None:
+			plt.savefig("%s_feature_selection_Q2divSD.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
 
 		RMSEP_CV_SEARCH = self.RMSEP_CV_SEARCH_
 		if nan_unstable:
 			RMSEP_CV_SEARCH[RMSEP_CV_SEARCH > 1] = np.nan
+		else:
+			RMSEP_CV_SEARCH[RMSEP_CV_SEARCH > 1] = 1.
 		plt.imshow(self.RMSEP_CV_SEARCH_, interpolation = None, cmap='jet_r')
 		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
 		plt.ylabel('eta (sparsity)')
@@ -673,7 +711,12 @@ class bootstraper_parallel():
 		plt.xlabel('Components')
 		plt.colorbar()
 		plt.title("RMSEP [CV]")
-		plt.show()
+		if png_basename is not None:
+			plt.savefig("%s_feature_selection_RMSEP.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+
 	def bootstrap_spls(self, i, X, y, n_comp, group, split, eta):
 		if i % 100 == 0: 
 			print("Bootstrap : %d" % (i))
@@ -707,11 +750,12 @@ class bootstraper_parallel():
 		n_fold = len(self.fold_indices_)
 		fold_index = np.arange(0,n_fold,1)
 		for s in search_array:
-			print(np.round(s,3))
+			print("\nSelection Threshold = %1.2f" % np.round(s,3))
 			selection_mask = self.selected_vars_mean_ > s
 			CV_temp_rmse = []
 			CV_temp_ve = []
 			X_SEL = self.X_[:,selection_mask]
+			print("\nNumber of Selected Variables: %d from %s " % (X_SEL.shape[1], self.X_.shape[1]))
 			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
 				for n in range(self.n_fold_):
 					sel_train = self.fold_indices_[n]
@@ -723,7 +767,7 @@ class bootstraper_parallel():
 					pls2 = PLSRegression(n_components=self.n_comp).fit(X_train, Y_train)
 					Y_proj = pls2.predict(X_test)
 					score = explained_variance_score(Y_test, Y_proj)
-					print("FOLD %d : %1.3f" % (n, score))
+					print("FOLD %d : %1.3f" % ((n+1), score))
 					CV_temp_ve.append(score)
 					CV_temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
 				print("CV MODEL : %1.3f +/- %1.3f" % (np.mean(CV_temp_ve), np.std(CV_temp_ve)))
@@ -804,7 +848,7 @@ class bootstraper_parallel():
 		self.RMSEP_LEARN_ = np.array(full_model_rmse)
 		self.R2_LEARN_ = np.array(full_model_ve)
 		self.search_thresholds_ = search_array
-	def plot_cv_search_array(self):
+	def plot_cv_search_array(self, png_basename = None):
 		assert hasattr(self,'search_thresholds_'), "Error: run cv_search_array"
 		isvalid_sd = np.zeros((len(self.search_thresholds_)), dtype = bool)
 		for i, s in enumerate(self.search_thresholds_):
@@ -824,7 +868,11 @@ class bootstraper_parallel():
 		plt.xlabel('Selection Threshold')
 		plt.xticks(Xthresholds, [s[:4] for s in np.round(Xthresholds,3).astype(str)])
 		plt.title("sPLS Model: Components = %d, eta = %1.2f, n_boot = %d" % (self.n_comp, self.eta, self.n_boot))
-		plt.show()
+		if png_basename is not None:
+			plt.savefig("%s_feature_selection_thresholds.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
 class spls_rwrapper:
 	"""
 	Wrapper that uses the spls r package, and rpy2
