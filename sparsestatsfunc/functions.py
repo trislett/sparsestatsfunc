@@ -757,6 +757,7 @@ class bootstraper_parallel():
 			X_SEL = self.X_[:,selection_mask]
 			print("\nNumber of Selected Variables: %d from %s " % (X_SEL.shape[1], self.X_.shape[1]))
 			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
+				components_variance_explained_test = np.zeros((self.n_fold_, self.n_comp))
 				for n in range(self.n_fold_):
 					sel_train = self.fold_indices_[n]
 					sel_test = np.concatenate(self.fold_indices_[fold_index != n])
@@ -770,18 +771,30 @@ class bootstraper_parallel():
 					print("FOLD %d : %1.3f" % ((n+1), score))
 					CV_temp_ve.append(score)
 					CV_temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
+					x_scores_test, y_scores_test = pls2.transform(X_test, Y_test)
+					for c in range(self.n_comp):
+						yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_test.std(axis=0, ddof=1) + Y_test.mean(axis=0)
+						components_variance_explained_test[n, c] = explained_variance_score(Y_test, yhat_c)
 				print("CV MODEL : %1.3f +/- %1.3f" % (np.mean(CV_temp_ve), np.std(CV_temp_ve)))
+				for c in range(self.n_comp):
+					print("  CV COMP%d : %1.3f +/- %1.3f" % ((c+1), np.mean(components_variance_explained_test, 0)[c], np.std(components_variance_explained_test, 0)[c]))
 				rmse_cv.append(np.mean(CV_temp_rmse))
 				ve_cv.append(np.mean(CV_temp_ve))
 				rmse_cv_std.append(np.std(CV_temp_rmse))
 				ve_cv_std.append(np.std(CV_temp_ve))
 				# full model
-				pls2 = PLSRegression(n_components=self.n_comp).fit(X_SEL, self.y_)
+				X_SEL = self.X_train_[:,selection_mask]
+				Y_actual = self.y_train_
+				pls2 = PLSRegression(n_components=self.n_comp).fit(X_SEL, Y_actual)
 				Y_proj = pls2.predict(X_SEL)
-				score = explained_variance_score(self.y_, Y_proj)
-				print("MODEL : %1.3f" % (score))
+				score = explained_variance_score(Y_actual, Y_proj)
+				print("TRAIN FULL MODEL : %1.3f" % (score))
+				x_scores_test, y_scores_test = pls2.transform(X_SEL, Y_actual)
+				for c in range(self.n_comp):
+					yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_actual.std(axis=0, ddof=1) + Y_actual.mean(axis=0)
+					print("  TRAIN COMP%d : %1.3f" % ((c+1),explained_variance_score(Y_actual, yhat_c)))
 				full_model_ve.append(score)
-				full_model_rmse.append(mean_squared_error(self.y_, Y_proj, squared = False))
+				full_model_rmse.append(mean_squared_error(Y_actual, Y_proj, squared = False))
 			else:
 				rmse_cv.append(0.)
 				ve_cv.append(0.)
