@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import itertools
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -9,7 +10,7 @@ from statsmodels.stats.multitest import multipletests
 from joblib import Parallel, delayed
 
 from sklearn.metrics import r2_score, mean_squared_error, explained_variance_score
-from sklearn.cross_decomposition import PLSRegression
+from sklearn.cross_decomposition import PLSRegression, CCA, PLSCanonical
 
 from rpy2.robjects import numpy2ri
 from rpy2.robjects.packages import importr
@@ -18,16 +19,52 @@ from rpy2.robjects.packages import importr
 import warnings
 from rpy2.rinterface import RRuntimeWarning
 warnings.filterwarnings("ignore", category=RRuntimeWarning)
+import warnings
+warnings.filterwarnings('ignore') 
 
 from sparsestatsfunc.cynumstats import cy_lin_lstsqr_mat_residual, cy_lin_lstsqr_mat, fast_se_of_slope, tval_fast
 
 stats = importr('stats')
 base = importr('base')
-spls = importr('spls')
-pma = importr('PMA')
 utils = importr('utils')
 
-numpy2ri.activate()
+# autoinstalls the r packages... not the smartest thing to do.
+# create an install R + packages script later
+try:
+	spls = importr('spls')
+except:
+	utils.install_packages('PMA')
+	pma = importr('PMA')
+try:
+	pma = importr('PMA')
+except:
+	utils.install_packages('PMA')
+	pma = importr('PMA')
+
+
+
+
+def zscaler_XY(X, y, axis=0, w_mean=True, scale_x = True, scale_y = True):
+	"""
+	Applies scaling to X and y, return means and std regardless
+	"""
+	X_ = np.zeros_like(X)
+	X_[:] = np.copy(X)
+	X_mean_ = np.nanmean(X_, axis)
+	X_std_ = np.nanstd(X_, axis = axis, ddof=1)
+	Y_ = np.zeros_like(y)
+	Y_[:] = np.copy(y)
+	Y_mean_ = np.nanmean(Y_, axis)
+	Y_std_ = np.nanstd(Y_, axis = axis, ddof=1)
+	if w_mean:
+		X_ -= X_mean_
+		Y_ -= Y_mean_
+	if scale_x:
+		X_ /= X_std_
+	if scale_y:
+		Y_ /= Y_std_
+	return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
+
 
 class permute_model_parallel():
 	"""
@@ -72,8 +109,8 @@ class permute_model_parallel():
 				out.append(variable[unique == arr])
 		return np.concatenate(out)
 	def check_variables(self, X_Train, Y_Train, X_Test, Y_Test):
-		X_Train, Y_Train, X_Train_mean, Y_Train_mean, X_Train_std, Y_Train_std = self.zscaler_XY(X = X_Train, y = Y_Train)
-		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = self.zscaler_XY(X = X_Test, y = Y_Test)
+		X_Train, Y_Train, X_Train_mean, Y_Train_mean, X_Train_std, Y_Train_std = zscaler_XY(X = X_Train, y = Y_Train)
+		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = zscaler_XY(X = X_Test, y = Y_Test)
 		has_issue = False
 		if np.sum((X_Train_std == 0)*1) != 0:
 			print("Warning: zero standard deviation predictors detected in Training data. Printing index array")
@@ -89,8 +126,8 @@ class permute_model_parallel():
 		"""
 		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
 		"""
-		X_Train, Y_Train, X_Train_mean, Y_Train_mean, X_Train_std, Y_Train_std = self.zscaler_XY(X = X_Train, y = Y_Train)
-		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = self.zscaler_XY(X = X_Test, y = Y_Test)
+		X_Train, Y_Train, X_Train_mean, Y_Train_mean, X_Train_std, Y_Train_std = zscaler_XY(X = X_Train, y = Y_Train)
+		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = zscaler_XY(X = X_Test, y = Y_Test)
 		ugroup_train = np.unique(group_train)
 
 		# Calculate Q2 squared
@@ -535,7 +572,7 @@ class bootstraper_parallel():
 		y_mean_selected = []
 		for c in range(max_ncomp):
 			K = c + 1
-			output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.ssca_bootstrap)(i, n_components = K, X = self.X_train_, y = self.y_train_, l1x = l1x, l1y = l1x, group = self.nfold_groups[self.nfold_groups != "TEST"], split = self.split) for i in range(self.n_boot))
+			output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.ssca_bootstrap)(i, n_components = K, X = self.X_train_, y = self.y_train_, l1x = l1x, l1y = l1y, group = self.nfold_groups[self.nfold_groups != "TEST"], split = self.split) for i in range(self.n_boot))
 			X_selected, y_selected = zip(*output)
 			X_selected = np.array(X_selected)
 			X_selected_mean = np.mean(X_selected, 0)
@@ -550,7 +587,10 @@ class bootstraper_parallel():
 				Y_SEL = self.y_[:,y_selection_mask]
 				temp_Q2 = np.zeros((self.n_fold_))
 				temp_rmse = np.zeros((self.n_fold_))
-				if ((K+1) < X_SEL.shape[1]) and (Y_SEL.shape[1] > (K+1)):
+				n_samples = X_SEL.shape[0]
+				n_features = X_SEL.shape[1]
+				n_targets = Y_SEL.shape[1]
+				if K <= min(n_samples, n_features, n_targets):
 					for n in range(self.n_fold_):
 						sel_train = self.fold_indices_[n]
 						sel_test = np.concatenate(self.fold_indices_[fold_index != n])
@@ -563,23 +603,26 @@ class bootstraper_parallel():
 						tmpX_train = tmpX_train[:,tmpX_train.std(0) > 0.0001]
 						tmpY_test = tmpY_test[:,tmpY_train.std(0) > 0.0001]
 						tmpY_train = tmpY_train[:,tmpY_train.std(0) > 0.0001]
-						bsscca = scca_rwrapper(n_components = K, X_L1_penalty = l1x, y_L1_penalty = l1y, max_iter = 100).fit(X = tmpX_train, y = tmpY_train)
+						# no sparsity
+						bsscca = PLSCanonical(n_components = K, max_iter=100).fit(tmpX_train, tmpY_train)
 						Y_proj = bsscca.predict(tmpX_test)
 						temp_Q2[n] = explained_variance_score(tmpY_test, Y_proj)
 						temp_rmse[n] = mean_squared_error(tmpY_test, Y_proj, squared = False)
-					Q2_grid_arr[c,n] = np.mean(temp_Q2)
-					Q2_grid_arr_sd[c,n] = np.std(temp_Q2)
-					RMSE_grid_arr[c,n] = np.mean(temp_rmse)
-					RMSE_grid_arr_sd[c,n] = np.std(temp_rmse)
+					Q2_grid_arr[c,s] = np.mean(temp_Q2)
+					Q2_grid_arr_sd[c,s] = np.std(temp_Q2)
+					RMSE_grid_arr[c,s] = np.mean(temp_rmse)
+					RMSE_grid_arr_sd[c,s] = np.std(temp_rmse)
 				else:
-					Q2_grid_arr[c,n] = 0.
-					Q2_grid_arr_sd[c,n] = 1.
-					RMSE_grid_arr[c,n] =  0.
-					RMSE_grid_arr_sd[c,n] = 1.
+					Q2_grid_arr[c,s] = 0.
+					Q2_grid_arr_sd[c,s] = 1.
+					RMSE_grid_arr[c,s] =  0.
+					RMSE_grid_arr_sd[c,s] = 1.
 		self.Q2_GRIDSEARCH_ = Q2_grid_arr
 		self.Q2_GRIDSEARCH_SD_ = Q2_grid_arr_sd
 		self.RMSEP_CV_GRIDSEARCH_ = RMSE_grid_arr
 		self.RMSEP_CV_GRIDSEARCH_SD_ = RMSE_grid_arr_sd
+		self.mean_selected_X = np.array(X_mean_selected)
+		self.mean_selected_y = np.array(y_mean_selected)
 	def nfold_params_search(self, c, X, y, group, train_index, fold_indices, eta_range = np.arange(.1,1.,.1), n_reshuffle = 1):
 		"""
 		"""
@@ -1000,26 +1043,6 @@ class scca_rwrapper:
 		self.scale_x = scale_x
 		self.scale_y = scale_y
 		self.penalty = "l1"
-	def zscaler_XY(self, X, y, axis=0, w_mean=True, scale_x = True, scale_y = True):
-		"""
-		Applies scaling to X and y, return means and std regardless
-		"""
-		X_ = np.zeros_like(X)
-		X_[:] = np.copy(X)
-		X_mean_ = np.nanmean(X_, axis)
-		X_std_ = np.nanstd(X_, axis = axis, ddof=1)
-		Y_ = np.zeros_like(y)
-		Y_[:] = np.copy(y)
-		Y_mean_ = np.nanmean(Y_, axis)
-		Y_std_ = np.nanstd(Y_, axis = axis, ddof=1)
-		if w_mean:
-			X_ -= X_mean_
-			Y_ -= Y_mean_
-		if scale_x:
-			X_ /= X_std_
-		if scale_y:
-			Y_ /= Y_std_
-		return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
 	def fit(self, X, y):
 		"""
 		Fit for scca model. The functions saves outputs using sklearn's naming convention.
@@ -1042,9 +1065,10 @@ class scca_rwrapper:
 		self.coef_ : array
 			coefficient array [N_predictors, N_responses]
 		"""
-		X, y, X_mean, y_mean, X_std, y_std = self.zscaler_XY(X, y, scale_x = self.scale_x, scale_y = self.scale_y)
+		X, y, X_mean, y_mean, X_std, y_std = zscaler_XY(X, y, scale_x = self.scale_x, scale_y = self.scale_y)
 		Xk = np.array(X)
 		yk = np.array(y)
+		numpy2ri.activate()
 		model = pma.CCA(x = X, z = y,
 							K = self.n_components,
 							penaltyx = self.X_L1_penalty,
@@ -1054,6 +1078,7 @@ class scca_rwrapper:
 		u = model.rx2("u")
 		v = model.rx2("v")
 		d = model.rx2("d")
+		numpy2ri.deactivate()
 		self.cors =  model.rx2("cors")
 		keepx = (np.mean((u != 0)*1,1) > 0)*1
 		keepy = (np.mean((v != 0)*1,1) > 0)*1
@@ -1108,6 +1133,17 @@ class scca_rwrapper:
 				y_scores = np.dot(y, self.y_weights_)
 				return(x_scores, y_scores)
 			return(x_scores)
+	def score(self, X = None, y = None):
+		if X is not None:
+			assert y is not None, "Error: for test data, by X and y must be specified"
+			X, y, _, _, _, _ = zscaler_XY(X, y)
+		else:
+			X = self.X_
+			y = self.y_
+		x_scores = np.dot(X, self.x_weights_)
+		y_scores = np.dot(y, self.y_weights_)
+		cors = np.corrcoef(x_scores_.T, y_scores_.T).diagonal(self.n_components)
+		return(x_scores, y_scores, cors)
 	def predict(self, X, fit_slected = False):
 		"""
 		Predict y from X using the scca model
@@ -1187,9 +1223,10 @@ class spls_rwrapper:
 		self.coef_ : array
 			coefficient array [N_predictors, N_responses]
 		"""
-		X, y, X_mean, y_mean, X_std, y_std = self.zscaler_XY(X, y, scale_x = self.scale_x, scale_y = self.scale_y)
+		X, y, X_mean, y_mean, X_std, y_std = zscaler_XY(X, y, scale_x = self.scale_x, scale_y = self.scale_y)
 		X = np.array(X)
 		y = np.array(y)
+		numpy2ri.activate()
 		model = spls.spls(X, y,
 							K = self.n_components,
 							eta = self.eta,
@@ -1202,6 +1239,7 @@ class spls_rwrapper:
 		for i in range(self.n_components):
 			components[i] = model.rx2("betamat")[i]
 			sel_vars.append(model.rx2("new2As")[i])
+		numpy2ri.deactivate()
 		self.betacomponents_ = np.array(components)
 		self.selectedvariablescomponents_ = np.array(sel_vars, dtype=object) - 1
 		self.selectedvariablesindex_ = np.sort(np.concatenate(sel_vars)) - 1
@@ -1212,26 +1250,7 @@ class spls_rwrapper:
 		self.y_ = y
 		self.y_mean_ = y_mean
 		self.y_std = y_std
-	def zscaler_XY(self, X, y, axis=0, w_mean=True, scale_x = True, scale_y = True):
-		"""
-		Applies scaling to X and y, return means and std regardless
-		"""
-		X_ = np.zeros_like(X)
-		X_[:] = np.copy(X)
-		X_mean_ = np.nanmean(X_, axis)
-		X_std_ = np.nanstd(X_, axis = axis, ddof=1)
-		Y_ = np.zeros_like(y)
-		Y_[:] = np.copy(y)
-		Y_mean_ = np.nanmean(Y_, axis)
-		Y_std_ = np.nanstd(Y_, axis = axis, ddof=1)
-		if w_mean:
-			X_ -= X_mean_
-			Y_ -= Y_mean_
-		if scale_x:
-			X_ /= X_std_
-		if scale_y:
-			Y_ /= Y_std_
-		return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
+		return(self)
 	def transform(self, X, y = None):
 		"""
 		Calculate the component scores for predictors.
