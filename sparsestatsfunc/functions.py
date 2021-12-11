@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from scipy.stats import t, f
+from scipy.linalg import pinv
 from statsmodels.stats.multitest import multipletests
 from joblib import Parallel, delayed
 
@@ -23,6 +24,7 @@ from sparsestatsfunc.cynumstats import cy_lin_lstsqr_mat_residual, cy_lin_lstsqr
 stats = importr('stats')
 base = importr('base')
 spls = importr('spls')
+pma = importr('PMA')
 utils = importr('utils')
 
 numpy2ri.activate()
@@ -484,6 +486,100 @@ class bootstraper_parallel():
 		self.y_train_ = y_train
 		self.X_test_ = X_test
 		self.y_test_ = y_test
+	def scca_params_search(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), png_basename = None):
+		search_x_size = len(l1x_range)
+		search_y_size = len(l1y_range)
+		cancor = np.zeros((search_x_size, search_y_size))
+		highest = 0
+		for i,j in np.array(list(itertools.product(range(search_x_size), range(search_y_size)))):
+			scca = scca_rwrapper(n_components = 1, X_L1_penalty = l1x_range[i], y_L1_penalty = l1y_range[j], max_iter = 100, scale_x = True, scale_y = True).fit(X = self.X_train_, y = self.y_train_)
+			cancor[i,j] = scca.cors[0]
+			if scca.cors[0] > highest:
+				highest = scca.cors[0]
+				best_l1_x = l1x_range[i]
+				best_l1_y = l1y_range[j]
+				print("Current best penalties: l1[x] = %1.2f and l1[y] = %1.2f, Correlation = %1.3f" % (best_l1_x, best_l1_y, highest))
+		plt.imshow(cancor, interpolation = None, cmap='jet')
+		plt.yticks(range(search_y_size),[s[:3] for s in l1y_range.astype(str)])
+		plt.ylabel('L1 sparsity y')
+		plt.xticks(range(search_x_size),[s[:3] for s in l1x_range.astype(str)])
+		plt.xlabel('L1 sparsity X')
+		plt.colorbar()
+		if png_basename is not None:
+			plt.savefig("%s_sparsity_params_search.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+
+	def ssca_bootstrap(self, i, n_components, X, y, l1x, l1y, group, split):
+		if i % 100 == 0: 
+			print("Bootstrap : %d" % (i))
+		train_idx, _ = self.bootstrap_by_group(group = group, split = split)
+		X = X[train_idx]
+		y = y[train_idx]
+		scca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x, y_L1_penalty = l1y, max_iter = 100).fit(X = X, y = y)
+		return(scca.x_selectedvariablesindex_, scca.y_selectedvariablesindex_)
+
+	def run_ssca_bootstrap(self, l1x, l1y, thresholds = np.arange(0.1,1.0,0.1), max_ncomp = 8):
+		grouping_var = np.array(self.group_)
+		grouping_var[self.test_index_] = "TEST"
+		for i in range(len(self.fold_indices_)):
+			grouping_var[self.fold_indices_[i]] = "FOLD%d" % (i+1)
+		self.nfold_groups = grouping_var
+		fold_index = np.arange(0,self.n_fold_,1)
+		Q2_grid_arr = np.zeros((max_ncomp, len(thresholds)))
+		RMSE_grid_arr = np.zeros((max_ncomp, len(thresholds)))
+		Q2_grid_arr_sd = np.zeros((max_ncomp, len(thresholds)))
+		RMSE_grid_arr_sd = np.zeros((max_ncomp, len(thresholds)))
+		X_mean_selected = []
+		y_mean_selected = []
+		for c in range(max_ncomp):
+			K = c + 1
+			output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.ssca_bootstrap)(i, n_components = K, X = self.X_train_, y = self.y_train_, l1x = l1x, l1y = l1x, group = self.nfold_groups[self.nfold_groups != "TEST"], split = self.split) for i in range(self.n_boot))
+			X_selected, y_selected = zip(*output)
+			X_selected = np.array(X_selected)
+			X_selected_mean = np.mean(X_selected, 0)
+			y_selected = np.array(y_selected)
+			y_selected_mean = np.mean(y_selected, 0)
+			X_mean_selected.append(X_selected_mean)
+			y_mean_selected.append(y_selected_mean)
+			for s, threshold in enumerate(thresholds):
+				X_selection_mask = X_selected_mean > threshold
+				y_selection_mask = y_selected_mean > threshold
+				X_SEL = self.X_[:,X_selection_mask]
+				Y_SEL = self.y_[:,y_selection_mask]
+				temp_Q2 = np.zeros((self.n_fold_))
+				temp_rmse = np.zeros((self.n_fold_))
+				if ((K+1) < X_SEL.shape[1]) and (Y_SEL.shape[1] > (K+1)):
+					for n in range(self.n_fold_):
+						sel_train = self.fold_indices_[n]
+						sel_test = np.concatenate(self.fold_indices_[fold_index != n])
+						tmpX_train = X_SEL[sel_train]
+						tmpY_train = Y_SEL[sel_train]
+						tmpX_test = X_SEL[sel_test]
+						tmpY_test = Y_SEL[sel_test]
+						# kick out effective zero predictors
+						tmpX_test = tmpX_test[:,tmpX_train.std(0) > 0.0001]
+						tmpX_train = tmpX_train[:,tmpX_train.std(0) > 0.0001]
+						tmpY_test = tmpY_test[:,tmpY_train.std(0) > 0.0001]
+						tmpY_train = tmpY_train[:,tmpY_train.std(0) > 0.0001]
+						bsscca = scca_rwrapper(n_components = K, X_L1_penalty = l1x, y_L1_penalty = l1y, max_iter = 100).fit(X = tmpX_train, y = tmpY_train)
+						Y_proj = bsscca.predict(tmpX_test)
+						temp_Q2[n] = explained_variance_score(tmpY_test, Y_proj)
+						temp_rmse[n] = mean_squared_error(tmpY_test, Y_proj, squared = False)
+					Q2_grid_arr[c,n] = np.mean(temp_Q2)
+					Q2_grid_arr_sd[c,n] = np.std(temp_Q2)
+					RMSE_grid_arr[c,n] = np.mean(temp_rmse)
+					RMSE_grid_arr_sd[c,n] = np.std(temp_rmse)
+				else:
+					Q2_grid_arr[c,n] = 0.
+					Q2_grid_arr_sd[c,n] = 1.
+					RMSE_grid_arr[c,n] =  0.
+					RMSE_grid_arr_sd[c,n] = 1.
+		self.Q2_GRIDSEARCH_ = Q2_grid_arr
+		self.Q2_GRIDSEARCH_SD_ = Q2_grid_arr_sd
+		self.RMSEP_CV_GRIDSEARCH_ = RMSE_grid_arr
+		self.RMSEP_CV_GRIDSEARCH_SD_ = RMSE_grid_arr_sd
 	def nfold_params_search(self, c, X, y, group, train_index, fold_indices, eta_range = np.arange(.1,1.,.1), n_reshuffle = 1):
 		"""
 		"""
@@ -886,6 +982,145 @@ class bootstraper_parallel():
 			plt.close()
 		else:
 			plt.show()
+
+
+class scca_rwrapper:
+	"""
+	Wrapper that uses the PMA (PMA-package: Penalized Multivariate Analysis) r package, and rpy2
+	https://rdrr.io/cran/PMA/man/CCA.html
+	Based on: Witten D. M., Tibshirani R., and Hastie, T. (2009) doi: 10.1093/biostatistics/kxp008. 
+	"""
+	def __init__(self, n_components, X_L1_penalty = 0.3, y_L1_penalty = 0.3, max_iter = 100, scale_x = True, scale_y = True):
+		self.n_components = n_components
+		assert (X_L1_penalty >= 0) and (X_L1_penalty <= 1), "Error: X_L1_penalty must be between 0 and 1"
+		assert (y_L1_penalty >= 0) and (y_L1_penalty <= 1), "Error: X_L1_penalty must be between 0 and 1"
+		self.X_L1_penalty = X_L1_penalty
+		self.y_L1_penalty = y_L1_penalty
+		self.max_iter = max_iter
+		self.scale_x = scale_x
+		self.scale_y = scale_y
+		self.penalty = "l1"
+	def zscaler_XY(self, X, y, axis=0, w_mean=True, scale_x = True, scale_y = True):
+		"""
+		Applies scaling to X and y, return means and std regardless
+		"""
+		X_ = np.zeros_like(X)
+		X_[:] = np.copy(X)
+		X_mean_ = np.nanmean(X_, axis)
+		X_std_ = np.nanstd(X_, axis = axis, ddof=1)
+		Y_ = np.zeros_like(y)
+		Y_[:] = np.copy(y)
+		Y_mean_ = np.nanmean(Y_, axis)
+		Y_std_ = np.nanstd(Y_, axis = axis, ddof=1)
+		if w_mean:
+			X_ -= X_mean_
+			Y_ -= Y_mean_
+		if scale_x:
+			X_ /= X_std_
+		if scale_y:
+			Y_ /= Y_std_
+		return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
+	def fit(self, X, y):
+		"""
+		Fit for scca model. The functions saves outputs using sklearn's naming convention.
+		https://github.com/scikit-learn/scikit-learn/blob/0d378913b/sklearn/cross_decomposition/_pls.py
+		
+		Parameters
+		----------
+		X : array
+			Array of predictors [N_subjects, N_predictors]
+		y : float
+			Array of responses [N_subjects, N_responses]
+		Returns
+		---------
+		self.betacomponents_ : array
+			beta component vectors [N_components, N_predictors, N_responses]
+		self.selectedvariablescomponents_ : object
+			selected variables for each component [N_components, N_selected]
+		self.selectedvariablesindex_ : arr1
+			Selected variables index. Useful for subsetting
+		self.coef_ : array
+			coefficient array [N_predictors, N_responses]
+		"""
+		X, y, X_mean, y_mean, X_std, y_std = self.zscaler_XY(X, y, scale_x = self.scale_x, scale_y = self.scale_y)
+		Xk = np.array(X)
+		yk = np.array(y)
+		model = pma.CCA(x = X, z = y,
+							K = self.n_components,
+							penaltyx = self.X_L1_penalty,
+							penaltyz = self.y_L1_penalty,
+							niter = self.max_iter,
+							trace  = False)
+		u = model.rx2("u")
+		v = model.rx2("v")
+		d = model.rx2("d")
+		self.cors =  model.rx2("cors")
+		keepx = (np.mean((u != 0)*1,1) > 0)*1
+		keepy = (np.mean((v != 0)*1,1) > 0)*1
+		self.x_selectedvariablescomponents_ = (u != 0)*1
+		self.y_selectedvariablescomponents_ = (v != 0)*1
+		self.x_selectedvariablesindex_ = keepx
+		self.y_selectedvariablesindex_ = keepy
+		self.x_weights_ = u
+		self.y_weights_ = v
+		self.x_scores_ = np.dot(X, u)
+		self.y_scores_ = np.dot(y, v)
+		self.x_loadings_ = np.zeros((X.shape[1], self.n_components))
+		self.y_loadings_ = np.zeros((y.shape[1], self.n_components))
+		for c in range(self.n_components):
+			self.x_loadings_[:,c] = np.dot(self.x_scores_[:,c], Xk) / np.dot(self.x_scores_[:,c], self.x_scores_[:,c])
+			# Subtract the rank-one approximations to obtain remainder matrices
+			Xk -= np.outer(self.x_scores_[:,c], self.x_loadings_[:,c])
+			self.y_loadings_[:,c] = np.dot(self.y_scores_[:,c], yk) / np.dot(self.y_scores_[:,c], self.y_scores_[:,c])
+			# Subtract the rank-one approximations to obtain remainder matrices
+			yk -= np.outer(self.y_scores_[:,c], self.y_loadings_[:,c])
+		self.x_rotations_ = np.dot(self.x_weights_, pinv(np.dot(self.x_loadings_.T, self.x_weights_), check_finite=False))
+		self.y_rotations_ = np.dot(self.y_weights_, pinv(np.dot(self.y_loadings_.T, self.y_weights_), check_finite=False))
+		self.coef_ = np.dot(self.x_rotations_, self.y_loadings_.T) * y_std
+		self.d_ = d
+		self.X_ = X
+		self.X_mean_ = X_mean
+		self.X_std_ = X_std
+		self.y_ = y
+		self.y_mean_ = y_mean
+		self.y_std_ = y_std
+		return(self)
+	def transform(self, X, y = None, fit_slected = False):
+		"""
+		Calculate the component scores for selected variables.
+		"""
+		# spls::spls uses pls::plsr. I'll use sklearn.cross_decomposition.CCA
+		if fit_slected:
+			scca = CCA(n_components=self.n_components).fit(self.X_[:, self.x_selectedvariablesindex_], self.y_[:, self.y_selectedvariablesindex_])
+			if y is not None:
+				return(scca.transform(X[:, self.x_selectedvariablesindex_], y[:, self.y_selectedvariablesindex_]))
+			else:
+				return(scca.transform(X[:, self.self.x_selectedvariablesindex_]))
+		else:
+			X -= self.X_mean_
+			X /= self.X_std_
+			x_scores = np.dot(X, self.x_weights_)
+			if y is not None:
+				if y.ndim == 1:
+					y = y.reshape(-1, 1)
+				y -= self._y_mean
+				y /= self._y_std
+				y_scores = np.dot(y, self.y_weights_)
+				return(x_scores, y_scores)
+			return(x_scores)
+	def predict(self, X, fit_slected = False):
+		"""
+		Predict y from X using the scca model
+		"""
+		X -= self.X_mean_
+		X /= self.X_std_
+		if fit_slected:
+			scca = CCA(n_components=self.n_components).fit(self.X_[:, self.x_selectedvariablesindex_], self.y_[:, self.y_selectedvariablesindex_])
+			yhat = scca.predict(X[:, self.x_selectedvariablesindex_])
+		else:
+			yhat = np.dot(X,self.coef_) + self.y_mean_
+		return(yhat)
+
 class spls_rwrapper:
 	"""
 	Wrapper that uses the spls r package, and rpy2
@@ -1011,8 +1246,9 @@ class spls_rwrapper:
 		"""
 		Predict y from X using the spls model
 		"""
-		return(np.dot(X,self.coef_))
-
+		X -= self.X_mean_
+		X /= self.X_std_
+		return(np.dot(X,self.coef_) + self.y_mean_)
 class linear_regression:
 	def __init__(self):
 		self.coef = None
