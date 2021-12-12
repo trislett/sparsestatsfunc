@@ -31,15 +31,21 @@ utils = importr('utils')
 # autoinstalls the r packages... not the smartest thing to do.
 # create an install R + packages script later
 try:
+	from sparsecca._cca_pmd import cca as scca
+	have_sparsecca = True
+except:
+	have_sparsecca = False
+	try:
+		pma = importr('PMA')
+	except:
+		utils.install_packages('PMA')
+		pma = importr('PMA')
+try:
 	spls = importr('spls')
 except:
-	utils.install_packages('PMA')
-	pma = importr('PMA')
-try:
-	pma = importr('PMA')
-except:
-	utils.install_packages('PMA')
-	pma = importr('PMA')
+	utils.install_packages('spls')
+	pma = importr('spls')
+
 
 
 
@@ -1029,11 +1035,15 @@ class bootstraper_parallel():
 
 class scca_rwrapper:
 	"""
-	Wrapper that uses the PMA (PMA-package: Penalized Multivariate Analysis) r package, and rpy2
+	Uses python based sparsecca package (cca_pmd) which provides identical results to R PMA library with option to the R package
+	https://github.com/Teekuningas/sparsecca 
+	
+	R Wrapper that uses the PMA (PMA-package: Penalized Multivariate Analysis) r package, and rpy2
 	https://rdrr.io/cran/PMA/man/CCA.html
-	Based on: Witten D. M., Tibshirani R., and Hastie, T. (2009) doi: 10.1093/biostatistics/kxp008. 
+	
+	Based on: Witten D. M., Tibshirani R., and Hastie, T. (2009) doi: 10.1093/biostatistics/kxp008 
 	"""
-	def __init__(self, n_components, X_L1_penalty = 0.3, y_L1_penalty = 0.3, max_iter = 100, scale_x = True, scale_y = True):
+	def __init__(self, n_components, X_L1_penalty = 0.3, y_L1_penalty = 0.3, max_iter = 100, scale_x = True, scale_y = True, force_pma = False):
 		self.n_components = n_components
 		assert (X_L1_penalty >= 0) and (X_L1_penalty <= 1), "Error: X_L1_penalty must be between 0 and 1"
 		assert (y_L1_penalty >= 0) and (y_L1_penalty <= 1), "Error: X_L1_penalty must be between 0 and 1"
@@ -1068,28 +1078,51 @@ class scca_rwrapper:
 		X, y, X_mean, y_mean, X_std, y_std = zscaler_XY(X, y, scale_x = self.scale_x, scale_y = self.scale_y)
 		Xk = np.array(X)
 		yk = np.array(y)
-		numpy2ri.activate()
-		model = pma.CCA(x = X, z = y,
-							K = self.n_components,
-							penaltyx = self.X_L1_penalty,
-							penaltyz = self.y_L1_penalty,
-							niter = self.max_iter,
-							trace  = False)
-		u = model.rx2("u")
-		v = model.rx2("v")
-		d = model.rx2("d")
-		numpy2ri.deactivate()
-		self.cors =  model.rx2("cors")
-		keepx = (np.mean((u != 0)*1,1) > 0)*1
-		keepy = (np.mean((v != 0)*1,1) > 0)*1
+		
+		# select the algorithm
+		if force_pma:
+			numpy2ri.activate()
+			model = pma.CCA(x = X, z = y,
+								K = self.n_components,
+								penaltyx = self.X_L1_penalty,
+								penaltyz = self.y_L1_penalty,
+								niter = self.max_iter,
+								trace  = False)
+			u = model.rx2("u")
+			v = model.rx2("v")
+			d = model.rx2("d")
+			numpy2ri.deactivate()
+		else:
+			if have_sparsecca:
+				u, v, d = scca(x = X, z = y,
+									K = self.n_components,
+									penaltyx = self.X_L1_penalty,
+									penaltyz = self.y_L1_penalty,
+									niter = self.max_iter)
+				self.cors =  model.rx2("cors")
+			else:
+				numpy2ri.activate()
+				model = pma.CCA(x = X, z = y,
+									K = self.n_components,
+									penaltyx = self.X_L1_penalty,
+									penaltyz = self.y_L1_penalty,
+									niter = self.max_iter,
+									trace  = False)
+				u = model.rx2("u")
+				v = model.rx2("v")
+				d = model.rx2("d")
+				numpy2ri.deactivate()
+
 		self.x_selectedvariablescomponents_ = (u != 0)*1
 		self.y_selectedvariablescomponents_ = (v != 0)*1
-		self.x_selectedvariablesindex_ = keepx
-		self.y_selectedvariablesindex_ = keepy
+		self.x_selectedvariablesindex_ = (np.mean((u != 0)*1,1) > 0)*1
+		self.y_selectedvariablesindex_ = (np.mean((v != 0)*1,1) > 0)*1
 		self.x_weights_ = u
 		self.y_weights_ = v
 		self.x_scores_ = np.dot(X, u)
 		self.y_scores_ = np.dot(y, v)
+		self.cors = np.corrcoef(x_scores_.T, y_scores_.T).diagonal(self.n_components)
+		# I'm unsure if this is correct to calculate loadings and rotation this way...
 		self.x_loadings_ = np.zeros((X.shape[1], self.n_components))
 		self.y_loadings_ = np.zeros((y.shape[1], self.n_components))
 		for c in range(self.n_components):
