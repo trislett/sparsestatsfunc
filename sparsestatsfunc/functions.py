@@ -31,15 +31,15 @@ utils = importr('utils')
 # autoinstalls the r packages... not the smartest thing to do.
 # create an install R + packages script later
 try:
-	from sparsecca._cca_pmd import cca as scca
+	from sparsecca._cca_pmd import cca as sparsecca
 	have_sparsecca = True
 except:
 	have_sparsecca = False
-	try:
-		pma = importr('PMA')
-	except:
-		utils.install_packages('PMA')
-		pma = importr('PMA')
+try:
+	pma = importr('PMA')
+except:
+	utils.install_packages('PMA')
+	pma = importr('PMA')
 try:
 	spls = importr('spls')
 except:
@@ -503,7 +503,7 @@ class bootstraper_parallel():
 			indx_0.append(pg[:int(len(pg)*split)])
 			indx_1.append(pg[int(len(pg)*split):])
 		return(np.concatenate(indx_0), np.concatenate(indx_1))
-	def create_nfold(self, X, y, group, n_fold = 5, holdout = 0.3, verbose = True):
+	def create_nfold(self, X, y, group, n_fold = 10, holdout = 0.3, verbose = True):
 		"""
 		Imports the data and runs nfoldsplit_group.
 		"""
@@ -553,8 +553,7 @@ class bootstraper_parallel():
 			plt.close()
 		else:
 			plt.show()
-
-	def ssca_bootstrap(self, i, n_components, X, y, l1x, l1y, group, split):
+	def scca_bootstrap(self, i, n_components, X, y, l1x, l1y, group, split):
 		if i % 100 == 0: 
 			print("Bootstrap : %d" % (i))
 		train_idx, _ = self.bootstrap_by_group(group = group, split = split)
@@ -563,7 +562,7 @@ class bootstraper_parallel():
 		scca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x, y_L1_penalty = l1y, max_iter = 100).fit(X = X, y = y)
 		return(scca.x_selectedvariablesindex_, scca.y_selectedvariablesindex_)
 
-	def run_ssca_bootstrap(self, l1x, l1y, thresholds = np.arange(0.1,1.0,0.1), max_ncomp = 8):
+	def run_scca_bootstrap(self, l1x, l1y, thresholds = np.arange(0.1,1.0,0.1), max_ncomp = 8):
 		grouping_var = np.array(self.group_)
 		grouping_var[self.test_index_] = "TEST"
 		for i in range(len(self.fold_indices_)):
@@ -578,7 +577,7 @@ class bootstraper_parallel():
 		y_mean_selected = []
 		for c in range(max_ncomp):
 			K = c + 1
-			output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.ssca_bootstrap)(i, n_components = K, X = self.X_train_, y = self.y_train_, l1x = l1x, l1y = l1y, group = self.nfold_groups[self.nfold_groups != "TEST"], split = self.split) for i in range(self.n_boot))
+			output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.scca_bootstrap)(i, n_components = K, X = self.X_train_, y = self.y_train_, l1x = l1x, l1y = l1y, group = self.nfold_groups[self.nfold_groups != "TEST"], split = self.split) for i in range(self.n_boot))
 			X_selected, y_selected = zip(*output)
 			X_selected = np.array(X_selected)
 			X_selected_mean = np.mean(X_selected, 0)
@@ -629,6 +628,101 @@ class bootstraper_parallel():
 		self.RMSEP_CV_GRIDSEARCH_SD_ = RMSE_grid_arr_sd
 		self.mean_selected_X = np.array(X_mean_selected)
 		self.mean_selected_y = np.array(y_mean_selected)
+	def scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, optimize_primary_component = False, n_reshuffle = 1, max_iter = 20, debug = False):
+		"""
+		return CV 
+		"""
+		p = 0
+		n_fold = len(fold_indices)
+		fold_index = np.arange(0,self.n_fold_,1)
+		nspls_runs = n_fold*n_reshuffle
+		temp_Q2 = np.zeros((nspls_runs))
+		stable_model = True
+		for r in range(n_reshuffle):
+			if n_reshuffle > 1:
+				fold_indices, _, _ = self.nfoldsplit_group(group = group,
+																	n_fold = n_fold,
+																	holdout = 0,
+																	train_index = train_index,
+																	verbose = False,
+																	debug_verbose = False)
+			for n in range(n_fold):
+				sel_train = fold_indices[n]
+				sel_test = np.concatenate(fold_indices[fold_index != n])
+				tmpX_train = X[sel_train]
+				tmpY_train = y[sel_train]
+				tmpX_test = X[sel_test]
+				tmpY_test = y[sel_test]
+				n_samples = tmpX_train.shape[0]
+				n_features = tmpX_train.shape[1]
+				n_targets = tmpY_train.shape[1]
+				cvscca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x_pen, y_L1_penalty =  l1y_pen, max_iter = max_iter).fit(tmpX_train, tmpY_train)
+				temp_cors = cvscca.score(tmpX_test, tmpY_test)[2]
+				sign_cors = np.sign(temp_cors)
+				if optimize_primary_component:
+					temp_Q2[p] = (temp_cors[0]**2) * sign_cors[0]
+				else:
+					temp_Q2[p] = np.sum((temp_cors**2) * sign_cors)
+				p+1
+		Q2_mean = np.mean(temp_Q2)
+		Q2_std = np.std(temp_Q2)
+		if debug:
+			print(K)
+			print(l1x_pen)
+			print(l1y_pen)
+			print(Q2_mean)
+			print(Q2_std)
+		return(Q2_mean, Q2_std)
+	def nfold_cv_params_search_scca(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), n_reshuffle = 1, max_iter = 20, optimize_primary_component = False, max_n_comp = None, debug = False):
+		if optimize_primary_component:
+			max_n_comp = 1
+		if max_n_comp is None:
+			# auto select max number of components by sqrt of smallest feature
+			n_samples = self.X_test_.shape[0]
+			n_features = self.X_test_.shape[1]
+			n_targets = self.y_test_.shape[1]
+			max_n_comp = int(np.sqrt(min(n_samples, n_features, n_targets)))
+			print("Search for up to %d components (Sqrt of min(n_samples, n_features, n_targets)" % (max_n_comp))
+		component_range = np.arange(1,(max_n_comp+1),1)
+		search_i_size = len(component_range)
+		search_j_size = len(l1x_range)
+		search_k_size = len(l1y_range)
+		Q2_GRIDSEARCH = np.zeros((search_i_size, search_j_size, search_k_size))
+		Q2_GRIDSEARCH_SD = np.zeros((search_i_size, search_j_size, search_k_size))
+		output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.scca_params_cvgridsearch)(X = self.X_,
+																																	y = self.y_,
+																																	K = component_range[i],
+																																	l1x_pen = l1x_range[j],
+																																	l1y_pen = l1y_range[k],
+																																	group = self.group_,
+																																	train_index = self.train_index_,
+																																	fold_indices = self.fold_indices_,
+																																	n_reshuffle = n_reshuffle,
+																																	debug = debug,
+																																	max_iter = max_iter) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
+		output_mean, output_sd = zip(*output)
+		count = 0
+		best_component = 0
+		best_l1_x = 0
+		best_l1_y = 0
+		highest = 0
+		for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))):
+			Q2_GRIDSEARCH[i,j,k] = output_mean[count]
+			Q2_GRIDSEARCH_SD[i,j,k] = output_sd[count]
+			if output_mean[count] > highest:
+				highest = output_mean[count]
+				best_component = component_range[i]
+				best_l1_x = l1x_range[j]
+				best_l1_y = l1y_range[k]
+				print("Current best Q-squared = %1.3f [Components = %d, l1[x] penalty = %1.2f, and l1[y] penalty = %1.2f]" % (highest, best_component, best_l1_x, best_l1_y))
+			count+=1
+		if debug:
+			self.output = output
+		self.Q2_GRIDSEARCH_ = np.array(Q2_GRIDSEARCH)
+		self.Q2_GRIDSEARCH_SD_ = np.array(Q2_GRIDSEARCH_SD)
+		self.GRIDSEARCH_BEST_COMPONENT_ = best_component
+		self.GRIDSEARCH_L1X_PENALTY_ = best_l1_x
+		self.GRIDSEARCH_L1Y_PENALTY_ = best_l1_y
 	def nfold_params_search(self, c, X, y, group, train_index, fold_indices, eta_range = np.arange(.1,1.,.1), n_reshuffle = 1):
 		"""
 		"""
@@ -1035,25 +1129,36 @@ class bootstraper_parallel():
 
 class scca_rwrapper:
 	"""
-	Uses python based sparsecca package (cca_pmd) which provides identical results to R PMA library with option to the R package
-	https://github.com/Teekuningas/sparsecca 
 	
+	By Default:
 	R Wrapper that uses the PMA (PMA-package: Penalized Multivariate Analysis) r package, and rpy2
 	https://rdrr.io/cran/PMA/man/CCA.html
 	
-	Based on: Witten D. M., Tibshirani R., and Hastie, T. (2009) doi: 10.1093/biostatistics/kxp008 
+	Set force_pma to false to use sparsecca package (cca_pmd) which provides identical results to R PMA library with option to the R package
+	https://github.com/Teekuningas/sparsecca
+	
+	default sets force_pma = True because the R implementation is slighlty faster (16 Thread Ryzen 7: sparsecca is 380ms and PMA is 300ms) => optimize the pycode ? 
+	
+	References:
+
+	Witten, D. M., Tibshirani, R., & Hastie, T. (2009). A penalized matrix decomposition, with applications to sparse principal components and
+	canonical correlation analysis. Biostatistics, 10(3), 515–534. http://doi.org/10.1093/biostatistics/kxp008
+	
+	Witten, D. M., & Tibshirani, R. J. (2009). Extensions of Sparse Canonical Correlation Analysis with Applications to Genomic Data.
+	Statistical Applications in Genetics and Molecular Biology, 8(1), 29. http://doi.org/10.2202/1544-6115.1470
 	"""
-	def __init__(self, n_components, X_L1_penalty = 0.3, y_L1_penalty = 0.3, max_iter = 100, scale_x = True, scale_y = True, force_pma = False):
+	def __init__(self, n_components, X_L1_penalty = 0.3, y_L1_penalty = 0.3, max_iter = 100, scale_x = True, scale_y = True, force_pma = True):
 		self.n_components = n_components
-		assert (X_L1_penalty >= 0) and (X_L1_penalty <= 1), "Error: X_L1_penalty must be between 0 and 1"
-		assert (y_L1_penalty >= 0) and (y_L1_penalty <= 1), "Error: X_L1_penalty must be between 0 and 1"
+		assert (X_L1_penalty > 0) and (X_L1_penalty <= 1), "Error: X_L1_penalty must be between 0 and 1"
+		assert (y_L1_penalty > 0) and (y_L1_penalty <= 1), "Error: y_L1_penalty must be between 0 and 1"
 		self.X_L1_penalty = X_L1_penalty
 		self.y_L1_penalty = y_L1_penalty
 		self.max_iter = max_iter
 		self.scale_x = scale_x
 		self.scale_y = scale_y
 		self.penalty = "l1"
-	def fit(self, X, y):
+		self.force_pma = force_pma
+	def fit(self, X, y, calculate_loadings = False):
 		"""
 		Fit for scca model. The functions saves outputs using sklearn's naming convention.
 		https://github.com/scikit-learn/scikit-learn/blob/0d378913b/sklearn/cross_decomposition/_pls.py
@@ -1080,7 +1185,7 @@ class scca_rwrapper:
 		yk = np.array(y)
 		
 		# select the algorithm
-		if force_pma:
+		if self.force_pma:
 			numpy2ri.activate()
 			model = pma.CCA(x = X, z = y,
 								K = self.n_components,
@@ -1094,12 +1199,11 @@ class scca_rwrapper:
 			numpy2ri.deactivate()
 		else:
 			if have_sparsecca:
-				u, v, d = scca(x = X, z = y,
+				u, v, d = sparsecca(X, y,
 									K = self.n_components,
 									penaltyx = self.X_L1_penalty,
 									penaltyz = self.y_L1_penalty,
 									niter = self.max_iter)
-				self.cors =  model.rx2("cors")
 			else:
 				numpy2ri.activate()
 				model = pma.CCA(x = X, z = y,
@@ -1121,20 +1225,21 @@ class scca_rwrapper:
 		self.y_weights_ = v
 		self.x_scores_ = np.dot(X, u)
 		self.y_scores_ = np.dot(y, v)
-		self.cors = np.corrcoef(x_scores_.T, y_scores_.T).diagonal(self.n_components)
+		self.cors = np.corrcoef(self.x_scores_.T, self.y_scores_.T).diagonal(self.n_components)
 		# I'm unsure if this is correct to calculate loadings and rotation this way...
-		self.x_loadings_ = np.zeros((X.shape[1], self.n_components))
-		self.y_loadings_ = np.zeros((y.shape[1], self.n_components))
-		for c in range(self.n_components):
-			self.x_loadings_[:,c] = np.dot(self.x_scores_[:,c], Xk) / np.dot(self.x_scores_[:,c], self.x_scores_[:,c])
-			# Subtract the rank-one approximations to obtain remainder matrices
-			Xk -= np.outer(self.x_scores_[:,c], self.x_loadings_[:,c])
-			self.y_loadings_[:,c] = np.dot(self.y_scores_[:,c], yk) / np.dot(self.y_scores_[:,c], self.y_scores_[:,c])
-			# Subtract the rank-one approximations to obtain remainder matrices
-			yk -= np.outer(self.y_scores_[:,c], self.y_loadings_[:,c])
-		self.x_rotations_ = np.dot(self.x_weights_, pinv(np.dot(self.x_loadings_.T, self.x_weights_), check_finite=False))
-		self.y_rotations_ = np.dot(self.y_weights_, pinv(np.dot(self.y_loadings_.T, self.y_weights_), check_finite=False))
-		self.coef_ = np.dot(self.x_rotations_, self.y_loadings_.T) * y_std
+		if calculate_loadings:
+			self.x_loadings_ = np.zeros((X.shape[1], self.n_components))
+			self.y_loadings_ = np.zeros((y.shape[1], self.n_components))
+			for c in range(self.n_components):
+				self.x_loadings_[:,c] = np.dot(self.x_scores_[:,c], Xk) / np.dot(self.x_scores_[:,c], self.x_scores_[:,c])
+				# Subtract the rank-one approximations to obtain remainder matrices
+				Xk -= np.outer(self.x_scores_[:,c], self.x_loadings_[:,c])
+				self.y_loadings_[:,c] = np.dot(self.y_scores_[:,c], yk) / np.dot(self.y_scores_[:,c], self.y_scores_[:,c])
+				# Subtract the rank-one approximations to obtain remainder matrices
+				yk -= np.outer(self.y_scores_[:,c], self.y_loadings_[:,c])
+			self.x_rotations_ = np.dot(self.x_weights_, pinv(np.dot(self.x_loadings_.T, self.x_weights_), check_finite=False))
+			self.y_rotations_ = np.dot(self.y_weights_, pinv(np.dot(self.y_loadings_.T, self.y_weights_), check_finite=False))
+			self.coef_ = np.dot(self.x_rotations_, self.y_loadings_.T) * y_std
 		self.d_ = d
 		self.X_ = X
 		self.X_mean_ = X_mean
@@ -1175,7 +1280,7 @@ class scca_rwrapper:
 			y = self.y_
 		x_scores = np.dot(X, self.x_weights_)
 		y_scores = np.dot(y, self.y_weights_)
-		cors = np.corrcoef(x_scores_.T, y_scores_.T).diagonal(self.n_components)
+		cors = np.corrcoef(x_scores.T, y_scores.T).diagonal(self.n_components)
 		return(x_scores, y_scores, cors)
 	def predict(self, X, fit_slected = False):
 		"""
@@ -1184,8 +1289,8 @@ class scca_rwrapper:
 		X -= self.X_mean_
 		X /= self.X_std_
 		if fit_slected:
-			scca = CCA(n_components=self.n_components).fit(self.X_[:, self.x_selectedvariablesindex_], self.y_[:, self.y_selectedvariablesindex_])
-			yhat = scca.predict(X[:, self.x_selectedvariablesindex_])
+			cca = CCA(n_components=self.n_components).fit(self.X_[:, self.x_selectedvariablesindex_], self.y_[:, self.y_selectedvariablesindex_])
+			yhat = cca.predict(X[:, self.x_selectedvariablesindex_])
 		else:
 			yhat = np.dot(X,self.coef_) + self.y_mean_
 		return(yhat)
