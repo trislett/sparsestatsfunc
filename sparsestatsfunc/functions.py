@@ -628,7 +628,7 @@ class bootstraper_parallel():
 		self.RMSEP_CV_GRIDSEARCH_SD_ = RMSE_grid_arr_sd
 		self.mean_selected_X = np.array(X_mean_selected)
 		self.mean_selected_y = np.array(y_mean_selected)
-	def scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, optimize_primary_component = False, n_reshuffle = 1, max_iter = 20, debug = False):
+	def scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, optimize_primary_component = False, optimize_global_redundancy_index = False, n_reshuffle = 1, max_iter = 20, debug = False):
 		"""
 		return CV 
 		"""
@@ -637,7 +637,6 @@ class bootstraper_parallel():
 		fold_index = np.arange(0,self.n_fold_,1)
 		nspls_runs = n_fold*n_reshuffle
 		temp_Q2 = np.zeros((nspls_runs))
-		stable_model = True
 		for r in range(n_reshuffle):
 			if n_reshuffle > 1:
 				fold_indices, _, _ = self.nfoldsplit_group(group = group,
@@ -656,13 +655,16 @@ class bootstraper_parallel():
 				n_samples = tmpX_train.shape[0]
 				n_features = tmpX_train.shape[1]
 				n_targets = tmpY_train.shape[1]
-				cvscca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x_pen, y_L1_penalty =  l1y_pen, max_iter = max_iter).fit(tmpX_train, tmpY_train)
-				temp_cors = cvscca.score(tmpX_test, tmpY_test)[2]
-				sign_cors = np.sign(temp_cors)
+				cvscca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x_pen, y_L1_penalty =  l1y_pen, max_iter = max_iter).fit(tmpX_train, tmpY_train, calculate_loadings = False)
 				if optimize_primary_component:
-					temp_Q2[p] = (temp_cors[0]**2) * sign_cors[0]
+					temp_cors = cvscca.score(tmpX_test, tmpY_test)[0]
+					sign_cors = np.sign(temp_cors)
+					temp_Q2[p] = (temp_cors**2) * sign_cors[0]
 				else:
-					temp_Q2[p] = np.sum((temp_cors**2) * sign_cors)
+					# just optimize x for now...
+#					tmpX_test_predicted, tmpy_test_predicted = cvscca.predict(tmpX_test, tmpY_test)
+					tmpX_test_predicted, _ = cvscca.predict(X = tmpX_test)
+					temp_Q2[p] = r2_score(tmpX_test, tmpX_test_predicted)
 				p+1
 		Q2_mean = np.mean(temp_Q2)
 		Q2_std = np.std(temp_Q2)
@@ -677,11 +679,11 @@ class bootstraper_parallel():
 		if optimize_primary_component:
 			max_n_comp = 1
 		if max_n_comp is None:
-			# auto select max number of components by sqrt of smallest feature
+			# auto select max number of components of smallest feature
 			n_samples = self.X_test_.shape[0]
 			n_features = self.X_test_.shape[1]
 			n_targets = self.y_test_.shape[1]
-			max_n_comp = int(np.sqrt(min(n_samples, n_features, n_targets)))
+			max_n_comp = int(min(n_samples, n_features, n_targets))
 			print("Search for up to %d components (Sqrt of min(n_samples, n_features, n_targets)" % (max_n_comp))
 		component_range = np.arange(1,(max_n_comp+1),1)
 		search_i_size = len(component_range)
@@ -691,7 +693,7 @@ class bootstraper_parallel():
 		Q2_GRIDSEARCH_SD = np.zeros((search_i_size, search_j_size, search_k_size))
 		output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.scca_params_cvgridsearch)(X = self.X_,
 																																	y = self.y_,
-																																	K = component_range[i],
+																																	n_components = component_range[i],
 																																	l1x_pen = l1x_range[j],
 																																	l1y_pen = l1y_range[k],
 																																	group = self.group_,
@@ -1158,7 +1160,7 @@ class scca_rwrapper:
 		self.scale_y = scale_y
 		self.penalty = "l1"
 		self.force_pma = force_pma
-	def fit(self, X, y, calculate_loadings = False):
+	def fit(self, X, y, calculate_loadings = True):
 		"""
 		Fit for scca model. The functions saves outputs using sklearn's naming convention.
 		https://github.com/scikit-learn/scikit-learn/blob/0d378913b/sklearn/cross_decomposition/_pls.py
@@ -1217,61 +1219,68 @@ class scca_rwrapper:
 				d = model.rx2("d")
 				numpy2ri.deactivate()
 
-		self.x_selectedvariablescomponents_ = (u != 0)*1
-		self.y_selectedvariablescomponents_ = (v != 0)*1
-		self.x_selectedvariablesindex_ = (np.mean((u != 0)*1,1) > 0)*1
-		self.y_selectedvariablesindex_ = (np.mean((v != 0)*1,1) > 0)*1
-		self.x_weights_ = u
-		self.y_weights_ = v
-		self.x_scores_ = np.dot(X, u)
-		self.y_scores_ = np.dot(y, v)
-		self.cors = np.corrcoef(self.x_scores_.T, self.y_scores_.T).diagonal(self.n_components)
-		# I'm unsure if this is correct to calculate loadings and rotation this way...
-		if calculate_loadings:
-			self.x_loadings_ = np.zeros((X.shape[1], self.n_components))
-			self.y_loadings_ = np.zeros((y.shape[1], self.n_components))
-			for c in range(self.n_components):
-				self.x_loadings_[:,c] = np.dot(self.x_scores_[:,c], Xk) / np.dot(self.x_scores_[:,c], self.x_scores_[:,c])
-				# Subtract the rank-one approximations to obtain remainder matrices
-				Xk -= np.outer(self.x_scores_[:,c], self.x_loadings_[:,c])
-				self.y_loadings_[:,c] = np.dot(self.y_scores_[:,c], yk) / np.dot(self.y_scores_[:,c], self.y_scores_[:,c])
-				# Subtract the rank-one approximations to obtain remainder matrices
-				yk -= np.outer(self.y_scores_[:,c], self.y_loadings_[:,c])
-			self.x_rotations_ = np.dot(self.x_weights_, pinv(np.dot(self.x_loadings_.T, self.x_weights_), check_finite=False))
-			self.y_rotations_ = np.dot(self.y_weights_, pinv(np.dot(self.y_loadings_.T, self.y_weights_), check_finite=False))
-			self.coef_ = np.dot(self.x_rotations_, self.y_loadings_.T) * y_std
-		self.d_ = d
 		self.X_ = X
 		self.X_mean_ = X_mean
 		self.X_std_ = X_std
 		self.y_ = y
 		self.y_mean_ = y_mean
 		self.y_std_ = y_std
+
+		self.x_selectedvariablescomponents_ = (u != 0)*1
+		self.y_selectedvariablescomponents_ = (v != 0)*1
+		self.x_selectedvariablesindex_ = (np.mean((u != 0)*1,1) > 0)*1
+		self.y_selectedvariablesindex_ = (np.mean((v != 0)*1,1) > 0)*1
+		self.x_weights_ = u
+		self.y_weights_ = v
+		self.d_ = d
+		self.x_scores_ = np.dot(X, u)
+		self.y_scores_ = np.dot(y, v)
+		self.cors = self.score()
+		if calculate_loadings:
+#			https://pure.uvt.nl/ws/portalfiles/portal/596531/useofcaa_ab5.pdf and https://scholarscompass.vcu.edu/cgi/viewcontent.cgi?article=1001&context=socialwork_pubs
+			n_x = X.shape[1]
+			n_y = y.shape[1]
+			x_loading = np.zeros((n_x,self.n_components))
+			# ~ 34ms each
+			for k in range(self.n_components):
+				for n in range(n_x):
+					x_loading[n,k] = np.corrcoef(self.x_scores_[:,k], X[:,n])[0,1]
+			y_loading = np.zeros((n_y,self.n_components))
+			for k in range(self.n_components):
+				for n in range(n_y):
+					y_loading[n,k] = np.corrcoef(self.y_scores_[:,k], y[:,n])[0,1]
+			self.x_loadings_ = x_loading
+			self.y_loadings_ = y_loading
+			self.x_redundacy_variance_explained_components_ = np.mean(self.x_loadings_**2)*(self.cors**2)
+			self.x_redundacy_variance_explained_global_ = np.sum(self.x_redundacy_variance_explained_components_)
+			self.y_redundacy_variance_explained_components_ = np.mean(self.y_loadings_**2)*(self.cors**2)
+			self.y_redundacy_variance_explained_global_ = np.sum(self.y_redundacy_variance_explained_components_)
+#			self.x_rotations_ = np.dot(self.x_weights_, pinv(np.dot(self.x_loadings_.T, self.x_weights_), check_finite=False))
+#			self.y_rotations_ = np.dot(self.y_weights_, pinv(np.dot(self.y_loadings_.T, self.y_weights_), check_finite=False))
+#			self.coef_ = np.dot(self.x_rotations_, self.y_loadings_.T) * y_std
+			# ~ 3ms each
+			self.x_variance_explained_ = r2_score(self.X_, np.dot(self.x_scores_, pinv(self.x_weights_)))
+			self.y_variance_explained_ = r2_score(self.y_, np.dot(self.y_scores_, pinv(self.y_weights_)))
 		return(self)
-	def transform(self, X, y = None, fit_slected = False):
+	def transform(self, X = None, y = None):
 		"""
 		Calculate the component scores for selected variables.
 		"""
-		# spls::spls uses pls::plsr. I'll use sklearn.cross_decomposition.CCA
-		if fit_slected:
-			scca = CCA(n_components=self.n_components).fit(self.X_[:, self.x_selectedvariablesindex_], self.y_[:, self.y_selectedvariablesindex_])
-			if y is not None:
-				return(scca.transform(X[:, self.x_selectedvariablesindex_], y[:, self.y_selectedvariablesindex_]))
-			else:
-				return(scca.transform(X[:, self.self.x_selectedvariablesindex_]))
-		else:
-			X -= self.X_mean_
-			X /= self.X_std_
+		if X is not None:
+			X = scale(X)
 			x_scores = np.dot(X, self.x_weights_)
-			if y is not None:
-				if y.ndim == 1:
-					y = y.reshape(-1, 1)
-				y -= self._y_mean
-				y /= self._y_std
-				y_scores = np.dot(y, self.y_weights_)
-				return(x_scores, y_scores)
-			return(x_scores)
+		else:
+			x_scores = None
+		if y is not None:
+			y = scale(y)
+			y_scores = np.dot(y, self.y_weights_)
+		else:
+			y_scores = None
+		return(x_scores, y_scores)
 	def score(self, X = None, y = None):
+		"""
+		Returns the canonical correlation
+		"""
 		if X is not None:
 			assert y is not None, "Error: for test data, by X and y must be specified"
 			X, y, _, _, _, _ = zscaler_XY(X, y)
@@ -1280,20 +1289,25 @@ class scca_rwrapper:
 			y = self.y_
 		x_scores = np.dot(X, self.x_weights_)
 		y_scores = np.dot(y, self.y_weights_)
-		cors = np.corrcoef(x_scores.T, y_scores.T).diagonal(self.n_components)
-		return(x_scores, y_scores, cors)
-	def predict(self, X, fit_slected = False):
+		cancors = np.corrcoef(x_scores.T, y_scores.T).diagonal(self.n_components)
+		return(cancors)
+	def predict(self, X = None, y = None):
 		"""
-		Predict y from X using the scca model
+		Predict X or y by calculating canonical scores from the model, and then dotting be the inverse of the model weights by the canonical scores.
 		"""
-		X -= self.X_mean_
-		X /= self.X_std_
-		if fit_slected:
-			cca = CCA(n_components=self.n_components).fit(self.X_[:, self.x_selectedvariablesindex_], self.y_[:, self.y_selectedvariablesindex_])
-			yhat = cca.predict(X[:, self.x_selectedvariablesindex_])
+		if X is not None:
+			X = scale(X)
+			x_scores = np.dot(X, self.x_weights_)
+			x_predicted = np.dot(x_scores, pinv(self.x_weights_))
 		else:
-			yhat = np.dot(X,self.coef_) + self.y_mean_
-		return(yhat)
+			x_predicted = None
+		if y is not None:
+			y = scale(y)
+			y_scores = np.dot(y, self.y_weights_)
+			y_predicted = np.dot(y_scores, pinv(self.y_weights_))
+		else:
+			y_predicted = None
+		return(x_predicted, y_predicted)
 
 class spls_rwrapper:
 	"""
@@ -1540,6 +1554,28 @@ class ridge_regression:
 		X_ = self.stack_ones(X_)
 		return(np.dot(X_,self.coef))
 
+class exogenoues_variable:
+	def __init__(self, name, dmy_arr, exog_type):
+		try:
+			k = np.array(dmy_arr).shape[1]
+		except:
+			k = 1
+		self.name = [str(name)]
+		self.dmy_arr = [dmy_arr]
+		self.k = [k]
+		self.exog_type = [exog_type]
+	def add_var(self, name, dmy_arr, exog_type):
+		try:
+			k = np.array(dmy_arr).shape[1]
+		except:
+			k = 1
+		self.name.append(str(name))
+		self.k.append(k)
+		self.dmy_arr.append(dmy_arr)
+		self.exog_type.append(exog_type)
+	def print_variables(self):
+		for i in range(len(self.name)):
+			print("{" + str(self.name[i]) + " : " + str(self.exog_type[i]) + " : " + str(self.dmy_arr[i].shape) + "}")
 
 class tm_glm:
 	"""
