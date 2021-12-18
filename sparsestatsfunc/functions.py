@@ -46,10 +46,6 @@ except:
 	utils.install_packages('spls')
 	pma = importr('spls')
 
-
-
-
-
 def zscaler_XY(X, y, axis=0, w_mean=True, scale_x = True, scale_y = True):
 	"""
 	Applies scaling to X and y, return means and std regardless
@@ -79,26 +75,6 @@ class permute_model_parallel():
 	def __init__(self, n_jobs, n_permutations = 10000):
 		self.n_jobs = n_jobs
 		self.n_permutations = n_permutations
-	def zscaler_XY(self, X, y, axis = 0, ddof = 1, w_mean = True, scale_x = True, scale_y = True):
-		"""
-		Applies scaling to X and y, return means and std regardless
-		"""
-		X_ = np.zeros_like(X)
-		X_[:] = np.copy(X)
-		X_mean_ = np.nanmean(X_, axis)
-		X_std_ = np.nanstd(X_, axis = axis, ddof = ddof)
-		Y_ = np.zeros_like(y)
-		Y_[:] = np.copy(y)
-		Y_mean_ = np.nanmean(Y_, axis)
-		Y_std_ = np.nanstd(Y_, axis = axis, ddof = ddof)
-		if w_mean:
-			X_ -= X_mean_
-			Y_ -= Y_mean_
-		if scale_x:
-			X_ /= X_std_
-		if scale_y:
-			Y_ /= Y_std_
-		return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
 	def index_perm(self, unique_arr, arr, variable, within_group = True):
 		"""
 		Shuffles an array within group (within_group = True) or the groups (within_group = False)
@@ -529,202 +505,6 @@ class bootstraper_parallel():
 		self.y_train_ = y_train
 		self.X_test_ = X_test
 		self.y_test_ = y_test
-	def scca_params_search(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), png_basename = None):
-		search_x_size = len(l1x_range)
-		search_y_size = len(l1y_range)
-		cancor = np.zeros((search_x_size, search_y_size))
-		highest = 0
-		for i,j in np.array(list(itertools.product(range(search_x_size), range(search_y_size)))):
-			scca = scca_rwrapper(n_components = 1, X_L1_penalty = l1x_range[i], y_L1_penalty = l1y_range[j], max_iter = 100, scale_x = True, scale_y = True).fit(X = self.X_train_, y = self.y_train_)
-			cancor[i,j] = scca.cors[0]
-			if scca.cors[0] > highest:
-				highest = scca.cors[0]
-				best_l1_x = l1x_range[i]
-				best_l1_y = l1y_range[j]
-				print("Current best penalties: l1[x] = %1.2f and l1[y] = %1.2f, Correlation = %1.3f" % (best_l1_x, best_l1_y, highest))
-		plt.imshow(cancor, interpolation = None, cmap='jet')
-		plt.yticks(range(search_y_size),[s[:3] for s in l1y_range.astype(str)])
-		plt.ylabel('L1 sparsity y')
-		plt.xticks(range(search_x_size),[s[:3] for s in l1x_range.astype(str)])
-		plt.xlabel('L1 sparsity X')
-		plt.colorbar()
-		if png_basename is not None:
-			plt.savefig("%s_sparsity_params_search.png" % png_basename)
-			plt.close()
-		else:
-			plt.show()
-	def scca_bootstrap(self, i, n_components, X, y, l1x, l1y, group, split):
-		if i % 100 == 0: 
-			print("Bootstrap : %d" % (i))
-		train_idx, _ = self.bootstrap_by_group(group = group, split = split)
-		X = X[train_idx]
-		y = y[train_idx]
-		scca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x, y_L1_penalty = l1y, max_iter = 100).fit(X = X, y = y)
-		return(scca.x_selectedvariablesindex_, scca.y_selectedvariablesindex_)
-
-	def run_scca_bootstrap(self, l1x, l1y, thresholds = np.arange(0.1,1.0,0.1), max_ncomp = 8):
-		grouping_var = np.array(self.group_)
-		grouping_var[self.test_index_] = "TEST"
-		for i in range(len(self.fold_indices_)):
-			grouping_var[self.fold_indices_[i]] = "FOLD%d" % (i+1)
-		self.nfold_groups = grouping_var
-		fold_index = np.arange(0,self.n_fold_,1)
-		Q2_grid_arr = np.zeros((max_ncomp, len(thresholds)))
-		RMSE_grid_arr = np.zeros((max_ncomp, len(thresholds)))
-		Q2_grid_arr_sd = np.zeros((max_ncomp, len(thresholds)))
-		RMSE_grid_arr_sd = np.zeros((max_ncomp, len(thresholds)))
-		X_mean_selected = []
-		y_mean_selected = []
-		for c in range(max_ncomp):
-			K = c + 1
-			output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.scca_bootstrap)(i, n_components = K, X = self.X_train_, y = self.y_train_, l1x = l1x, l1y = l1y, group = self.nfold_groups[self.nfold_groups != "TEST"], split = self.split) for i in range(self.n_boot))
-			X_selected, y_selected = zip(*output)
-			X_selected = np.array(X_selected)
-			X_selected_mean = np.mean(X_selected, 0)
-			y_selected = np.array(y_selected)
-			y_selected_mean = np.mean(y_selected, 0)
-			X_mean_selected.append(X_selected_mean)
-			y_mean_selected.append(y_selected_mean)
-			for s, threshold in enumerate(thresholds):
-				X_selection_mask = X_selected_mean > threshold
-				y_selection_mask = y_selected_mean > threshold
-				X_SEL = self.X_[:,X_selection_mask]
-				Y_SEL = self.y_[:,y_selection_mask]
-				temp_Q2 = np.zeros((self.n_fold_))
-				temp_rmse = np.zeros((self.n_fold_))
-				n_samples = X_SEL.shape[0]
-				n_features = X_SEL.shape[1]
-				n_targets = Y_SEL.shape[1]
-				if K <= min(n_samples, n_features, n_targets):
-					for n in range(self.n_fold_):
-						sel_train = self.fold_indices_[n]
-						sel_test = np.concatenate(self.fold_indices_[fold_index != n])
-						tmpX_train = X_SEL[sel_train]
-						tmpY_train = Y_SEL[sel_train]
-						tmpX_test = X_SEL[sel_test]
-						tmpY_test = Y_SEL[sel_test]
-						# kick out effective zero predictors
-						tmpX_test = tmpX_test[:,tmpX_train.std(0) > 0.0001]
-						tmpX_train = tmpX_train[:,tmpX_train.std(0) > 0.0001]
-						tmpY_test = tmpY_test[:,tmpY_train.std(0) > 0.0001]
-						tmpY_train = tmpY_train[:,tmpY_train.std(0) > 0.0001]
-						# no sparsity
-						bsscca = PLSCanonical(n_components = K, max_iter=100).fit(tmpX_train, tmpY_train)
-						Y_proj = bsscca.predict(tmpX_test)
-						temp_Q2[n] = explained_variance_score(tmpY_test, Y_proj)
-						temp_rmse[n] = mean_squared_error(tmpY_test, Y_proj, squared = False)
-					Q2_grid_arr[c,s] = np.mean(temp_Q2)
-					Q2_grid_arr_sd[c,s] = np.std(temp_Q2)
-					RMSE_grid_arr[c,s] = np.mean(temp_rmse)
-					RMSE_grid_arr_sd[c,s] = np.std(temp_rmse)
-				else:
-					Q2_grid_arr[c,s] = 0.
-					Q2_grid_arr_sd[c,s] = 1.
-					RMSE_grid_arr[c,s] =  0.
-					RMSE_grid_arr_sd[c,s] = 1.
-		self.Q2_GRIDSEARCH_ = Q2_grid_arr
-		self.Q2_GRIDSEARCH_SD_ = Q2_grid_arr_sd
-		self.RMSEP_CV_GRIDSEARCH_ = RMSE_grid_arr
-		self.RMSEP_CV_GRIDSEARCH_SD_ = RMSE_grid_arr_sd
-		self.mean_selected_X = np.array(X_mean_selected)
-		self.mean_selected_y = np.array(y_mean_selected)
-	def scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, optimize_primary_component = False, optimize_global_redundancy_index = False, n_reshuffle = 1, max_iter = 20, debug = False):
-		"""
-		return CV 
-		"""
-		p = 0
-		n_fold = len(fold_indices)
-		fold_index = np.arange(0,self.n_fold_,1)
-		nspls_runs = n_fold*n_reshuffle
-		temp_Q2 = np.zeros((nspls_runs))
-		for r in range(n_reshuffle):
-			if n_reshuffle > 1:
-				fold_indices, _, _ = self.nfoldsplit_group(group = group,
-																	n_fold = n_fold,
-																	holdout = 0,
-																	train_index = train_index,
-																	verbose = False,
-																	debug_verbose = False)
-			for n in range(n_fold):
-				sel_train = fold_indices[n]
-				sel_test = np.concatenate(fold_indices[fold_index != n])
-				tmpX_train = X[sel_train]
-				tmpY_train = y[sel_train]
-				tmpX_test = X[sel_test]
-				tmpY_test = y[sel_test]
-				n_samples = tmpX_train.shape[0]
-				n_features = tmpX_train.shape[1]
-				n_targets = tmpY_train.shape[1]
-				cvscca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x_pen, y_L1_penalty =  l1y_pen, max_iter = max_iter).fit(tmpX_train, tmpY_train, calculate_loadings = False)
-				if optimize_primary_component:
-					temp_cors = cvscca.score(tmpX_test, tmpY_test)[0]
-					sign_cors = np.sign(temp_cors)
-					temp_Q2[p] = (temp_cors**2) * sign_cors[0]
-				else:
-					# just optimize x for now...
-#					tmpX_test_predicted, tmpy_test_predicted = cvscca.predict(tmpX_test, tmpY_test)
-					tmpX_test_predicted, _ = cvscca.predict(X = tmpX_test)
-					temp_Q2[p] = r2_score(tmpX_test, tmpX_test_predicted)
-				p+1
-		Q2_mean = np.mean(temp_Q2)
-		Q2_std = np.std(temp_Q2)
-		if debug:
-			print(K)
-			print(l1x_pen)
-			print(l1y_pen)
-			print(Q2_mean)
-			print(Q2_std)
-		return(Q2_mean, Q2_std)
-	def nfold_cv_params_search_scca(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), n_reshuffle = 1, max_iter = 20, optimize_primary_component = False, max_n_comp = None, debug = False):
-		if optimize_primary_component:
-			max_n_comp = 1
-		if max_n_comp is None:
-			# auto select max number of components of smallest feature
-			n_samples = self.X_test_.shape[0]
-			n_features = self.X_test_.shape[1]
-			n_targets = self.y_test_.shape[1]
-			max_n_comp = int(min(n_samples, n_features, n_targets))
-			print("Search for up to %d components (Sqrt of min(n_samples, n_features, n_targets)" % (max_n_comp))
-		component_range = np.arange(1,(max_n_comp+1),1)
-		search_i_size = len(component_range)
-		search_j_size = len(l1x_range)
-		search_k_size = len(l1y_range)
-		Q2_GRIDSEARCH = np.zeros((search_i_size, search_j_size, search_k_size))
-		Q2_GRIDSEARCH_SD = np.zeros((search_i_size, search_j_size, search_k_size))
-		output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.scca_params_cvgridsearch)(X = self.X_,
-																																	y = self.y_,
-																																	n_components = component_range[i],
-																																	l1x_pen = l1x_range[j],
-																																	l1y_pen = l1y_range[k],
-																																	group = self.group_,
-																																	train_index = self.train_index_,
-																																	fold_indices = self.fold_indices_,
-																																	n_reshuffle = n_reshuffle,
-																																	debug = debug,
-																																	max_iter = max_iter) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
-		output_mean, output_sd = zip(*output)
-		count = 0
-		best_component = 0
-		best_l1_x = 0
-		best_l1_y = 0
-		highest = 0
-		for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))):
-			Q2_GRIDSEARCH[i,j,k] = output_mean[count]
-			Q2_GRIDSEARCH_SD[i,j,k] = output_sd[count]
-			if output_mean[count] > highest:
-				highest = output_mean[count]
-				best_component = component_range[i]
-				best_l1_x = l1x_range[j]
-				best_l1_y = l1y_range[k]
-				print("Current best Q-squared = %1.3f [Components = %d, l1[x] penalty = %1.2f, and l1[y] penalty = %1.2f]" % (highest, best_component, best_l1_x, best_l1_y))
-			count+=1
-		if debug:
-			self.output = output
-		self.Q2_GRIDSEARCH_ = np.array(Q2_GRIDSEARCH)
-		self.Q2_GRIDSEARCH_SD_ = np.array(Q2_GRIDSEARCH_SD)
-		self.GRIDSEARCH_BEST_COMPONENT_ = best_component
-		self.GRIDSEARCH_L1X_PENALTY_ = best_l1_x
-		self.GRIDSEARCH_L1Y_PENALTY_ = best_l1_y
 	def nfold_params_search(self, c, X, y, group, train_index, fold_indices, eta_range = np.arange(.1,1.,.1), n_reshuffle = 1):
 		"""
 		"""
@@ -1129,12 +909,325 @@ class bootstraper_parallel():
 			plt.show()
 
 
+class parallel_scca():
+
+	def __init__(self, n_jobs = 8, n_permutations = 10000):
+		"""
+		Main SCCA function
+		"""
+		self.n_jobs = n_jobs
+		self.n_permutations = n_permutations
+	def nfoldsplit_group(self, group, n_fold = 10, holdout = 0, train_index = None, verbose = False, debug_verbose = False):
+		"""
+		Creates indexed array(s) for k-fold cross validation with holdout option for test data. The ratio of the groups are maintained. To reshuffle the training, if can be passed back through via index_train.
+		The indices are always based on the original grouping variable. i.e., the orignal data.
+		
+		Parameters
+		----------
+		group : array
+			List array with length of number of subjects. 
+		n_fold : int
+			The number of folds
+		holdout : float
+			The amount of data to holdout ranging from 0 to <1. A reasonable holdout is around 0.3 or 30 percent. If holdout = None, then returns test_index = None. (default = 0)
+		train_index : array
+			Indexed array of training data. Holdout must be zero (holdout = 0). It is useful for re-shuffling the fold indices or changing the number of folds.
+		verbose : bool
+			Prints out the splits and some basic information
+		debug_verbose: bool
+			Prints out the indices by group
+		Returns
+		---------
+		train_index : array
+			index array of training data
+		fold_indices : object
+			the index array for each fold (n_folds, training_fold_size)
+		test_index : array or None
+			index array of test data
+		"""
+		test_index = None
+		original_group = group[:]
+		ugroup = np.unique(group)
+		lengroup = len(group)
+		indices = np.arange(0,lengroup,1)
+		if holdout != 0:
+			assert holdout < 1., "Error: Holdout ratio must be >0 and <1.0. Try .3"
+			assert train_index is None, "Error: train index already exists."
+			indx_0 = []
+			indx_1 = []
+			for g in ugroup:
+				pg = np.random.permutation(indices[group==g])
+				indx_0.append(pg[:int(len(pg)*holdout)])
+				indx_1.append(pg[int(len(pg)*holdout):])
+			train_index = np.concatenate(indx_1)
+			test_index = np.concatenate(indx_0)
+			group = group[train_index]
+			if verbose:
+				print("Train data size = %s, Test data size = %s [holdout = %1.2f]" %(len(train_index), len(test_index), holdout))
+		else:
+			if train_index is None:
+				train_index = indices[:]
+			else:
+				group = group[train_index]
+		# reshuffle for good luck
+		gsize = []
+		shuffle_train = []
+		for g in ugroup:
+			pg = np.random.permutation(train_index[group==g])
+			gsize.append(len(pg))
+			shuffle_train.append(pg)
+		train_index = np.concatenate(shuffle_train)
+		group = original_group[train_index]
+		split_sizes = np.divide(gsize, n_fold).astype(int)
+		if verbose:
+			for s in range(len(ugroup)):
+				print("Training group [%s]: size n=%d, split size = %d, remainder = %d" % (ugroup[s], gsize[s], split_sizes[s], int(gsize[s] % split_sizes[s])))
+			if test_index is not None:
+				for s in range(len(ugroup)):
+					original_group[test_index] == ugroup[s]
+					test_size = np.sum((original_group[test_index] == ugroup[s])*1)
+					print("Test group [%s]: size n=%d, holdout percentage = %1.2f" % (ugroup[s], test_size, np.divide(test_size * 100, test_size+gsize[s])))
+		fold_indices = []
+		for n in range(n_fold):
+			temp_index = []
+			for i, g in enumerate(ugroup):
+				temp = train_index[group==g]
+				if n == n_fold-1:
+					temp_index.append(temp[n*split_sizes[i]:])
+				else:
+					temp_index.append(temp[n*split_sizes[i]:((n+1)*split_sizes[i])])
+				if debug_verbose:
+					print(n)
+					print(g)
+					print(original_group[temp_index[-1]])
+					print(temp_index[-1])
+			fold_indices.append(np.concatenate(temp_index))
+		train_index = np.sort(train_index)
+		fold_indices = np.array(fold_indices, dtype = object)
+		if holdout != 0:
+			test_index = np.sort(test_index)
+		if verbose:
+			for i in range(n_fold):
+				print("\nFOLD %d:" % (i+1))
+				print(np.sort(original_group[fold_indices[i]]))
+			if test_index is not None:
+				print("\nTEST:" )
+				print(np.sort(original_group[test_index]))
+		return(fold_indices, train_index, test_index)
+	def create_nfold(self, X, y, group, n_fold = 10, holdout = 0.3, verbose = True):
+		"""
+		Imports the data and runs nfoldsplit_group.
+		"""
+		fold_indices, train_index, test_index  = self.nfoldsplit_group(group = group,
+																							n_fold = n_fold,
+																							holdout = holdout,
+																							train_index = None,
+																							verbose = verbose,
+																							debug_verbose = False)
+		X_train = X[train_index]
+		y_train = y[train_index]
+		if test_index is not None:
+			X_test= X[test_index]
+			y_test= y[test_index]
+		self.train_index_ = train_index
+		self.fold_indices_ = fold_indices
+		self.test_index_ = test_index
+		self.X_ = X
+		self.y_ = y
+		self.group_ = group
+		self.n_fold_ = n_fold
+		self.X_train_ = X_train
+		self.y_train_ = y_train
+		self.X_test_ = X_test
+		self.y_test_ = y_test
+	def _scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, optimize_primary_component = False, optimize_global_redundancy_index = False, n_reshuffle = 1, max_iter = 20, debug = False):
+		"""
+		return CV 
+		"""
+		p = 0
+		n_fold = len(fold_indices)
+		fold_index = np.arange(0,self.n_fold_,1)
+		nspls_runs = n_fold*n_reshuffle
+		temp_Q2 = np.zeros((nspls_runs))
+		for r in range(n_reshuffle):
+			if n_reshuffle > 1:
+				fold_indices, _, _ = self.nfoldsplit_group(group = group,
+																	n_fold = n_fold,
+																	holdout = 0,
+																	train_index = train_index,
+																	verbose = False,
+																	debug_verbose = False)
+			for n in range(n_fold):
+				sel_train = fold_indices[n]
+				sel_test = np.concatenate(fold_indices[fold_index != n])
+				tmpX_train = X[sel_train]
+				tmpY_train = y[sel_train]
+				tmpX_test = X[sel_test]
+				tmpY_test = y[sel_test]
+				n_samples = tmpX_train.shape[0]
+				n_features = tmpX_train.shape[1]
+				n_targets = tmpY_train.shape[1]
+				cvscca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x_pen, y_L1_penalty =  l1y_pen, max_iter = max_iter).fit(tmpX_train, tmpY_train, calculate_loadings = False)
+				if optimize_primary_component:
+					temp_cors = cvscca.score(tmpX_test, tmpY_test)[0]
+					sign_cors = np.sign(temp_cors)
+					temp_Q2[p] = (temp_cors**2) * sign_cors[0]
+				else:
+					# just optimize x for now...
+					tmpX_test_predicted, _ = cvscca.predict(X = tmpX_test)
+					temp_Q2[p] = r2_score(tmpX_test, tmpX_test_predicted)
+				p+1
+		Q2_mean = np.mean(temp_Q2)
+		Q2_std = np.std(temp_Q2)
+		if debug:
+			print(K)
+			print(l1x_pen)
+			print(l1y_pen)
+			print(Q2_mean)
+			print(Q2_std)
+		return(Q2_mean, Q2_std)
+	def nfold_cv_params_search_scca(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), n_reshuffle = 1, max_iter = 20, optimize_primary_component = False, max_n_comp = None, debug = False):
+		if optimize_primary_component:
+			max_n_comp = 1
+		if max_n_comp is None:
+			# auto select max number of components of smallest feature
+			n_samples = self.X_test_.shape[0]
+			n_features = self.X_test_.shape[1]
+			n_targets = self.y_test_.shape[1]
+			max_n_comp = int(min(n_samples, n_features, n_targets))
+			print("Search for up to %d components (Sqrt of min(n_samples, n_features, n_targets)" % (max_n_comp))
+		component_range = np.arange(1,(max_n_comp+1),1)
+		search_i_size = len(component_range)
+		search_j_size = len(l1x_range)
+		search_k_size = len(l1y_range)
+		Q2_GRIDSEARCH = np.zeros((search_i_size, search_j_size, search_k_size))
+		Q2_GRIDSEARCH_SD = np.zeros((search_i_size, search_j_size, search_k_size))
+		output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self._scca_params_cvgridsearch)(X = self.X_,
+																																	y = self.y_,
+																																	n_components = component_range[i],
+																																	l1x_pen = l1x_range[j],
+																																	l1y_pen = l1y_range[k],
+																																	group = self.group_,
+																																	train_index = self.train_index_,
+																																	fold_indices = self.fold_indices_,
+																																	n_reshuffle = n_reshuffle,
+																																	debug = debug,
+																																	max_iter = max_iter) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
+		output_mean, output_sd = zip(*output)
+		count = 0
+		best_component = 0
+		best_l1_x = 0
+		best_l1_y = 0
+		highest = 0
+		for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))):
+			Q2_GRIDSEARCH[i,j,k] = output_mean[count]
+			Q2_GRIDSEARCH_SD[i,j,k] = output_sd[count]
+			if output_mean[count] > highest:
+				highest = output_mean[count]
+				best_component = component_range[i]
+				best_l1_x = l1x_range[j]
+				best_l1_y = l1y_range[k]
+				print("Current best Q-squared = %1.3f [Components = %d, l1[x] penalty = %1.2f, and l1[y] penalty = %1.2f]" % (highest, best_component, best_l1_x, best_l1_y))
+			count+=1
+		if debug:
+			self.output = output
+		self.Q2_GRIDSEARCH_ = np.array(Q2_GRIDSEARCH)
+		self.Q2_GRIDSEARCH_SD_ = np.array(Q2_GRIDSEARCH_SD)
+		self.GRIDSEARCH_BEST_COMPONENT_ = best_component
+		self.GRIDSEARCH_L1X_PENALTY_ = best_l1_x
+		self.GRIDSEARCH_L1Y_PENALTY_ = best_l1_y
+
+	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20):
+		"""
+		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
+		"""
+		
+		X_Train = self.X_train_
+		Y_Train = self.y_train_
+		X_Test = self.X_test_
+		Y_Test = self.y_test_
+
+		grouping_var = np.array(self.group_)
+		grouping_var[self.test_index_] = "TEST"
+		for i in range(len(self.fold_indices_)):
+			grouping_var[self.fold_indices_[i]] = "FOLD%d" % (i+1)
+		group_train = grouping_var[self.train_index_]
+		ugroup_train = np.unique(group_train)
+		
+		self.cvgroups_ = grouping_var
+
+		# Calculate Q2 squared
+		X_CV_Q2 = np.zeros((len(ugroup_train)))
+		Y_CV_Q2 = np.zeros((len(ugroup_train)))
+		X_CV_Q2_roi = np.zeros((len(ugroup_train), X_Train.shape[1]))
+		Y_CV_Q2_roi = np.zeros((len(ugroup_train), Y_Train.shape[1]))
+		X_CV_redundacy = np.zeros((len(ugroup_train), n_components))
+		Y_CV_redundacy = np.zeros((len(ugroup_train), n_components))
+		CV_canonicalcorrelation = np.zeros((len(ugroup_train), n_components))
+		for g, group in enumerate(ugroup_train):
+			X_gtrain = X_Train[group_train != group]
+			Y_gtrain = Y_Train[group_train != group]
+			X_gtest = X_Train[group_train == group]
+			Y_gtest = Y_Train[group_train == group]
+			cvscca = scca_rwrapper(n_components = n_components,
+											X_L1_penalty = X_L1_penalty, y_L1_penalty =  y_L1_penalty,
+											max_iter = max_iter).fit(X_gtrain, Y_gtrain, calculate_loadings = True)
+			X_gtest_hat, Y_gtest_hat = cvscca.predict(X = X_gtest, y = Y_gtest)
+			X_CV_Q2[g] = explained_variance_score(X_gtest, X_gtest_hat)
+			Y_CV_Q2[g] = explained_variance_score(Y_gtest, Y_gtest_hat)
+			X_CV_Q2_roi[g] = explained_variance_score(X_gtest, X_gtest_hat, multioutput = 'raw_values')
+			Y_CV_Q2_roi[g] = explained_variance_score(Y_gtest, Y_gtest_hat, multioutput = 'raw_values')
+			X_CV_redundacy[g] = cvscca.x_redundacy_variance_explained_components_
+			Y_CV_redundacy[g] = cvscca.y_redundacy_variance_explained_components_
+			CV_canonicalcorrelation[g] = cvscca.cors
+		self.Q2_X_train_ = X_CV_Q2.mean(0)
+		self.Q2_Y_train_ = Y_CV_Q2.mean(0)
+		self.Q2_X_train_std_ = X_CV_Q2.std(0)
+		self.Q2_Y_train_std_ = Y_CV_Q2.std(0)
+		self.Q2_X_train_targets_ = X_CV_Q2_roi.mean(0)
+		self.Q2_Y_train_targets_ = Y_CV_Q2_roi.mean(0)
+		self.Q2_X_train_targets_std_ = X_CV_Q2_roi.std(0)
+		self.Q2_Y_train_targets_std_ = Y_CV_Q2_roi.std(0)
+		self.CVRDI_X_component_ = X_CV_redundacy.mean(0)
+		self.CVRDI_Y_component_ = Y_CV_redundacy.mean(0)
+		self.CVRDI_X_component_std_ = X_CV_redundacy.std(0)
+		self.CVRDI_Y_component_std_ = Y_CV_redundacy.std(0)
+		self.CV_canonicalcorrelation_ = CV_canonicalcorrelation.mean(0)
+		self.CV_canonicalcorrelation_std_ = CV_canonicalcorrelation.std(0)
+
+		# Calculate R2 squared for training data
+		scca = scca_rwrapper(n_components = n_components,
+										X_L1_penalty = X_L1_penalty, y_L1_penalty =  y_L1_penalty,
+										max_iter = max_iter).fit(X_Train, Y_Train, calculate_loadings = True)
+		self.R2_X_train_ = scca.x_variance_explained_
+		self.R2_Y_train_ = scca.y_variance_explained_
+		X_Train_hat, Y_Train_hat = cvscca.predict(X = X_Train, y = Y_Train)
+		self.R2_X_train_targets_ = explained_variance_score(X_Train, X_Train_hat, multioutput = 'raw_values')
+		self.R2_Y_train_targets_ = explained_variance_score(Y_Train, Y_Train_hat, multioutput = 'raw_values')
+		self.RDI_X_train_components_ = scca.x_redundacy_variance_explained_components_
+		self.RDI_Y_train_components_ = scca.y_redundacy_variance_explained_components_
+		self.canonicalcorrelation_train_ = scca.cors
+
+		# Calculate R2P squared for test data
+		X_Test_hat, Y_Test_hat = scca.predict(X_Test, Y_Test)
+		self.R2_X_test_ = explained_variance_score(X_Test, X_Test_hat)
+		self.R2_Y_test_ = explained_variance_score(Y_Test, Y_Test_hat)
+		self.R2_X_test_targets_ = explained_variance_score(X_Test, X_Test_hat, multioutput = 'raw_values')
+		self.R2_Y_test_targets_ = explained_variance_score(Y_Test, Y_Test_hat, multioutput = 'raw_values')
+		self.canonicalcorrelation_test_ = scca.canonicalcorr(self.X_test_, self.y_test_)
+
+		self.n_components_ = n_components
+		self.X_L1_penalty_ = X_L1_penalty
+		self.y_L1_penalty_ = y_L1_penalty
+		self.model_obj_ = scca
+
 class scca_rwrapper:
 	"""
 	
 	By Default:
 	R Wrapper that uses the PMA (PMA-package: Penalized Multivariate Analysis) r package, and rpy2
 	https://rdrr.io/cran/PMA/man/CCA.html
+	Added calculation of loadings, prediction, redundacy metrics
 	
 	Set force_pma to false to use sparsecca package (cca_pmd) which provides identical results to R PMA library with option to the R package
 	https://github.com/Teekuningas/sparsecca
@@ -1235,30 +1328,17 @@ class scca_rwrapper:
 		self.d_ = d
 		self.x_scores_ = np.dot(X, u)
 		self.y_scores_ = np.dot(y, v)
-		self.cors = self.score()
+		self.cors = self.canonicalcorr()
 		if calculate_loadings:
 #			https://pure.uvt.nl/ws/portalfiles/portal/596531/useofcaa_ab5.pdf and https://scholarscompass.vcu.edu/cgi/viewcontent.cgi?article=1001&context=socialwork_pubs
 			n_x = X.shape[1]
 			n_y = y.shape[1]
-			x_loading = np.zeros((n_x,self.n_components))
-			# ~ 34ms each
-			for k in range(self.n_components):
-				for n in range(n_x):
-					x_loading[n,k] = np.corrcoef(self.x_scores_[:,k], X[:,n])[0,1]
-			y_loading = np.zeros((n_y,self.n_components))
-			for k in range(self.n_components):
-				for n in range(n_y):
-					y_loading[n,k] = np.corrcoef(self.y_scores_[:,k], y[:,n])[0,1]
-			self.x_loadings_ = x_loading
-			self.y_loadings_ = y_loading
+			self.x_loadings_ = np.corrcoef(self.x_scores_.T, X.T)[self.n_components:,0:self.n_components]
+			self.y_loadings_ = np.corrcoef(self.y_scores_.T, y.T)[self.n_components:,0:self.n_components]
 			self.x_redundacy_variance_explained_components_ = np.mean(self.x_loadings_**2)*(self.cors**2)
 			self.x_redundacy_variance_explained_global_ = np.sum(self.x_redundacy_variance_explained_components_)
 			self.y_redundacy_variance_explained_components_ = np.mean(self.y_loadings_**2)*(self.cors**2)
 			self.y_redundacy_variance_explained_global_ = np.sum(self.y_redundacy_variance_explained_components_)
-#			self.x_rotations_ = np.dot(self.x_weights_, pinv(np.dot(self.x_loadings_.T, self.x_weights_), check_finite=False))
-#			self.y_rotations_ = np.dot(self.y_weights_, pinv(np.dot(self.y_loadings_.T, self.y_weights_), check_finite=False))
-#			self.coef_ = np.dot(self.x_rotations_, self.y_loadings_.T) * y_std
-			# ~ 3ms each
 			self.x_variance_explained_ = r2_score(self.X_, np.dot(self.x_scores_, pinv(self.x_weights_)))
 			self.y_variance_explained_ = r2_score(self.y_, np.dot(self.y_scores_, pinv(self.y_weights_)))
 		return(self)
@@ -1277,7 +1357,7 @@ class scca_rwrapper:
 		else:
 			y_scores = None
 		return(x_scores, y_scores)
-	def score(self, X = None, y = None):
+	def canonicalcorr(self, X = None, y = None):
 		"""
 		Returns the canonical correlation
 		"""
@@ -2081,5 +2161,105 @@ class tm_glm:
 #		self.all_output = all_output
 #		self.penalty = "l1"
 
+
+#	def scca_params_search(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), png_basename = None):
+#		search_x_size = len(l1x_range)
+#		search_y_size = len(l1y_range)
+#		cancor = np.zeros((search_x_size, search_y_size))
+#		highest = 0
+#		for i,j in np.array(list(itertools.product(range(search_x_size), range(search_y_size)))):
+#			scca = scca_rwrapper(n_components = 1, X_L1_penalty = l1x_range[i], y_L1_penalty = l1y_range[j], max_iter = 100, scale_x = True, scale_y = True).fit(X = self.X_train_, y = self.y_train_)
+#			cancor[i,j] = scca.cors[0]
+#			if scca.cors[0] > highest:
+#				highest = scca.cors[0]
+#				best_l1_x = l1x_range[i]
+#				best_l1_y = l1y_range[j]
+#				print("Current best penalties: l1[x] = %1.2f and l1[y] = %1.2f, Correlation = %1.3f" % (best_l1_x, best_l1_y, highest))
+#		plt.imshow(cancor, interpolation = None, cmap='jet')
+#		plt.yticks(range(search_y_size),[s[:3] for s in l1y_range.astype(str)])
+#		plt.ylabel('L1 sparsity y')
+#		plt.xticks(range(search_x_size),[s[:3] for s in l1x_range.astype(str)])
+#		plt.xlabel('L1 sparsity X')
+#		plt.colorbar()
+#		if png_basename is not None:
+#			plt.savefig("%s_sparsity_params_search.png" % png_basename)
+#			plt.close()
+#		else:
+#			plt.show()
+#	def scca_bootstrap(self, i, n_components, X, y, l1x, l1y, group, split):
+#		if i % 100 == 0: 
+#			print("Bootstrap : %d" % (i))
+#		train_idx, _ = self.bootstrap_by_group(group = group, split = split)
+#		X = X[train_idx]
+#		y = y[train_idx]
+#		scca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x, y_L1_penalty = l1y, max_iter = 100).fit(X = X, y = y)
+#		return(scca.x_selectedvariablesindex_, scca.y_selectedvariablesindex_)
+
+#	def run_scca_bootstrap(self, l1x, l1y, thresholds = np.arange(0.1,1.0,0.1), max_ncomp = 8):
+#		grouping_var = np.array(self.group_)
+#		grouping_var[self.test_index_] = "TEST"
+#		for i in range(len(self.fold_indices_)):
+#			grouping_var[self.fold_indices_[i]] = "FOLD%d" % (i+1)
+#		self.nfold_groups = grouping_var
+#		fold_index = np.arange(0,self.n_fold_,1)
+#		Q2_grid_arr = np.zeros((max_ncomp, len(thresholds)))
+#		RMSE_grid_arr = np.zeros((max_ncomp, len(thresholds)))
+#		Q2_grid_arr_sd = np.zeros((max_ncomp, len(thresholds)))
+#		RMSE_grid_arr_sd = np.zeros((max_ncomp, len(thresholds)))
+#		X_mean_selected = []
+#		y_mean_selected = []
+#		for c in range(max_ncomp):
+#			K = c + 1
+#			output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.scca_bootstrap)(i, n_components = K, X = self.X_train_, y = self.y_train_, l1x = l1x, l1y = l1y, group = self.nfold_groups[self.nfold_groups != "TEST"], split = self.split) for i in range(self.n_boot))
+#			X_selected, y_selected = zip(*output)
+#			X_selected = np.array(X_selected)
+#			X_selected_mean = np.mean(X_selected, 0)
+#			y_selected = np.array(y_selected)
+#			y_selected_mean = np.mean(y_selected, 0)
+#			X_mean_selected.append(X_selected_mean)
+#			y_mean_selected.append(y_selected_mean)
+#			for s, threshold in enumerate(thresholds):
+#				X_selection_mask = X_selected_mean > threshold
+#				y_selection_mask = y_selected_mean > threshold
+#				X_SEL = self.X_[:,X_selection_mask]
+#				Y_SEL = self.y_[:,y_selection_mask]
+#				temp_Q2 = np.zeros((self.n_fold_))
+#				temp_rmse = np.zeros((self.n_fold_))
+#				n_samples = X_SEL.shape[0]
+#				n_features = X_SEL.shape[1]
+#				n_targets = Y_SEL.shape[1]
+#				if K <= min(n_samples, n_features, n_targets):
+#					for n in range(self.n_fold_):
+#						sel_train = self.fold_indices_[n]
+#						sel_test = np.concatenate(self.fold_indices_[fold_index != n])
+#						tmpX_train = X_SEL[sel_train]
+#						tmpY_train = Y_SEL[sel_train]
+#						tmpX_test = X_SEL[sel_test]
+#						tmpY_test = Y_SEL[sel_test]
+#						# kick out effective zero predictors
+#						tmpX_test = tmpX_test[:,tmpX_train.std(0) > 0.0001]
+#						tmpX_train = tmpX_train[:,tmpX_train.std(0) > 0.0001]
+#						tmpY_test = tmpY_test[:,tmpY_train.std(0) > 0.0001]
+#						tmpY_train = tmpY_train[:,tmpY_train.std(0) > 0.0001]
+#						# no sparsity
+#						bsscca = PLSCanonical(n_components = K, max_iter=100).fit(tmpX_train, tmpY_train)
+#						Y_proj = bsscca.predict(tmpX_test)
+#						temp_Q2[n] = explained_variance_score(tmpY_test, Y_proj)
+#						temp_rmse[n] = mean_squared_error(tmpY_test, Y_proj, squared = False)
+#					Q2_grid_arr[c,s] = np.mean(temp_Q2)
+#					Q2_grid_arr_sd[c,s] = np.std(temp_Q2)
+#					RMSE_grid_arr[c,s] = np.mean(temp_rmse)
+#					RMSE_grid_arr_sd[c,s] = np.std(temp_rmse)
+#				else:
+#					Q2_grid_arr[c,s] = 0.
+#					Q2_grid_arr_sd[c,s] = 1.
+#					RMSE_grid_arr[c,s] =  0.
+#					RMSE_grid_arr_sd[c,s] = 1.
+#		self.Q2_GRIDSEARCH_ = Q2_grid_arr
+#		self.Q2_GRIDSEARCH_SD_ = Q2_grid_arr_sd
+#		self.RMSEP_CV_GRIDSEARCH_ = RMSE_grid_arr
+#		self.RMSEP_CV_GRIDSEARCH_SD_ = RMSE_grid_arr_sd
+#		self.mean_selected_X = np.array(X_mean_selected)
+#		self.mean_selected_y = np.array(y_mean_selected)
 
 
