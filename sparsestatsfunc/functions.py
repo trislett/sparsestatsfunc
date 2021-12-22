@@ -688,7 +688,6 @@ class bootstraper_parallel():
 		Q2_SEARCH_SD = self.Q2_SEARCH_SD_
 		if nan_unstable:
 			Q2_SEARCH_SD[Q2_SEARCH < 0] = np.nan
-		plt.imshow(Q2_SEARCH, interpolation = None, cmap='jet')
 		plt.imshow(Q2_SEARCH_SD, interpolation = None, cmap='jet_r')
 		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
 		plt.ylabel('eta (sparsity)')
@@ -917,6 +916,22 @@ class parallel_scca():
 		"""
 		self.n_jobs = n_jobs
 		self.n_permutations = n_permutations
+	def index_perm(self, unique_arr, arr, variable, within_group = True):
+		"""
+		Shuffles an array within group (within_group = True) or the groups (within_group = False)
+		"""
+		rng = np.random.default_rng()
+		if within_group:
+			perm_u = unique_arr
+		else:
+			perm_u = rng.permutation(unique_arr)
+		out = []
+		for unique in perm_u:
+			if within_group:
+				out.append(rng.permutation(variable[unique == arr]))
+			else:
+				out.append(variable[unique == arr])
+		return np.concatenate(out)
 	def nfoldsplit_group(self, group, n_fold = 10, holdout = 0, train_index = None, verbose = False, debug_verbose = False):
 		"""
 		Creates indexed array(s) for k-fold cross validation with holdout option for test data. The ratio of the groups are maintained. To reshuffle the training, if can be passed back through via index_train.
@@ -1040,7 +1055,7 @@ class parallel_scca():
 		self.y_train_ = y_train
 		self.X_test_ = X_test
 		self.y_test_ = y_test
-	def _scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, optimize_primary_component = False, optimize_global_redundancy_index = False, n_reshuffle = 1, max_iter = 20, debug = False):
+	def _scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, n_reshuffle = 1, max_iter = 20, debug = False, verbose = True, optimize_x = False, optimize_y = False, optimize_primary_component = False, optimize_global_redundancy_index = False, optimize_selected_variables = True):
 		"""
 		return CV 
 		"""
@@ -1067,15 +1082,35 @@ class parallel_scca():
 				n_samples = tmpX_train.shape[0]
 				n_features = tmpX_train.shape[1]
 				n_targets = tmpY_train.shape[1]
-				cvscca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x_pen, y_L1_penalty =  l1y_pen, max_iter = max_iter).fit(tmpX_train, tmpY_train, calculate_loadings = False)
+				cvscca = scca_rwrapper(n_components = n_components, X_L1_penalty = l1x_pen, y_L1_penalty =  l1y_pen, max_iter = max_iter).fit(tmpX_train, tmpY_train, calculate_loadings = optimize_global_redundancy_index)
+				# clean up this choose your own adventure
 				if optimize_primary_component:
-					temp_cors = cvscca.score(tmpX_test, tmpY_test)[0]
-					sign_cors = np.sign(temp_cors)
-					temp_Q2[p] = (temp_cors**2) * sign_cors[0]
-				else:
-					# just optimize x for now...
-					tmpX_test_predicted, _ = cvscca.predict(X = tmpX_test)
-					temp_Q2[p] = r2_score(tmpX_test, tmpX_test_predicted)
+					temp_cors = cvscca.canonicalcorr(tmpX_test, tmpY_test)[0]
+					temp_Q2[p] = (temp_cors**2) * np.sign(temp_cors)
+				elif optimize_global_redundancy_index:
+					temp_Q2[p] = cvscca.x_redundacy_variance_explained_global_
+				else: 
+					tmpX_test_predicted, tmpY_test_predicted = cvscca.predict(X = tmpX_test, y = tmpY_test, toself = True)
+					if (optimize_x*optimize_y)==1:
+						if optimize_selected_variables:
+							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test[:,cvscca.x_selectedvariablesindex_==1], tmpX_test_predicted[:,cvscca.x_selectedvariablesindex_==1]) + cvscca._r2score(tmpY_test[:,cvscca.y_selectedvariablesindex_==1], tmpY_test_predicted[:,cvscca.y_selectedvariablesindex_==1])), 2)
+						else:
+							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test, tmpX_test_predicted) + cvscca._r2score(tmpY_test, tmpY_test_predicted)), 2)
+					elif optimize_x:
+						if optimize_selected_variables:
+							temp_Q2[p] = cvscca._r2score(tmpX_test[:,cvscca.x_selectedvariablesindex_==1], tmpX_test_predicted[:,cvscca.x_selectedvariablesindex_==1])
+						else:
+							temp_Q2[p] = cvscca._r2score(tmpX_test, tmpX_test_predicted)
+					elif optimize_y:
+						if optimize_selected_variables:
+							temp_Q2[p] = cvscca._r2score(tmpY_test[:,cvscca.y_selectedvariablesindex_==1], tmpY_test_predicted[:,cvscca.y_selectedvariablesindex_==1])
+						else:
+							temp_Q2[p] = cvscca._r2score(tmpY_test, tmpY_test_predicted)
+					else:
+						if optimize_selected_variables:
+							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test[:,cvscca.x_selectedvariablesindex_==1], tmpX_test_predicted[:,cvscca.x_selectedvariablesindex_==1]) + cvscca._r2score(tmpY_test[:,cvscca.y_selectedvariablesindex_==1], tmpY_test_predicted[:,cvscca.y_selectedvariablesindex_==1])), 2)
+						else:
+							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test, tmpX_test_predicted) + cvscca._r2score(tmpY_test, tmpY_test_predicted)), 2)
 				p+1
 		Q2_mean = np.mean(temp_Q2)
 		Q2_std = np.std(temp_Q2)
@@ -1085,8 +1120,10 @@ class parallel_scca():
 			print(l1y_pen)
 			print(Q2_mean)
 			print(Q2_std)
+		if verbose:
+			print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, Q2 = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, Q2_mean, Q2_std))
 		return(Q2_mean, Q2_std)
-	def nfold_cv_params_search_scca(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), n_reshuffle = 1, max_iter = 20, optimize_primary_component = False, max_n_comp = None, debug = False):
+	def nfold_cv_params_search_scca(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), n_reshuffle = 1, max_iter = 20, optimize_x = False, optimize_y = False, optimize_primary_component = False, optimize_global_redundancy_index = False, optimize_selected_variables = True, max_n_comp = None, debug = False):
 		if optimize_primary_component:
 			max_n_comp = 1
 		if max_n_comp is None:
@@ -1102,7 +1139,8 @@ class parallel_scca():
 		search_k_size = len(l1y_range)
 		Q2_GRIDSEARCH = np.zeros((search_i_size, search_j_size, search_k_size))
 		Q2_GRIDSEARCH_SD = np.zeros((search_i_size, search_j_size, search_k_size))
-		output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self._scca_params_cvgridsearch)(X = self.X_,
+		# because of indexing, everything is passed to the gridsearch. The function (above) only optimizes training data! np.sort(np.concatenate(self.fold_indices_)) == self.train_index_
+		output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self._scca_params_cvgridsearch)(X = self.X_, 
 																																	y = self.y_,
 																																	n_components = component_range[i],
 																																	l1x_pen = l1x_range[j],
@@ -1112,6 +1150,11 @@ class parallel_scca():
 																																	fold_indices = self.fold_indices_,
 																																	n_reshuffle = n_reshuffle,
 																																	debug = debug,
+																																	optimize_x = optimize_x,
+																																	optimize_y = optimize_y,
+																																	optimize_primary_component = optimize_primary_component,
+																																	optimize_global_redundancy_index = optimize_global_redundancy_index,
+																																	optimize_selected_variables = optimize_selected_variables,
 																																	max_iter = max_iter) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
 		output_mean, output_sd = zip(*output)
 		count = 0
@@ -1127,8 +1170,13 @@ class parallel_scca():
 				best_component = component_range[i]
 				best_l1_x = l1x_range[j]
 				best_l1_y = l1y_range[k]
-				print("Current best Q-squared = %1.3f [Components = %d, l1[x] penalty = %1.2f, and l1[y] penalty = %1.2f]" % (highest, best_component, best_l1_x, best_l1_y))
+				if optimize_global_redundancy_index:
+					print("Current best Global Redundacy Index (X) = %1.3f [Components = %d, l1[x] penalty = %1.2f, and l1[y] penalty = %1.2f]" % (highest, best_component, best_l1_x, best_l1_y))
+				else:
+					print("Current best Q-squared = %1.3f [Components = %d, l1[x] penalty = %1.2f, and l1[y] penalty = %1.2f]" % (highest, best_component, best_l1_x, best_l1_y))
 			count+=1
+		if highest == 0:
+			print("Q-squared was never above zero")
 		if debug:
 			self.output = output
 		self.Q2_GRIDSEARCH_ = np.array(Q2_GRIDSEARCH)
@@ -1136,8 +1184,57 @@ class parallel_scca():
 		self.GRIDSEARCH_BEST_COMPONENT_ = best_component
 		self.GRIDSEARCH_L1X_PENALTY_ = best_l1_x
 		self.GRIDSEARCH_L1Y_PENALTY_ = best_l1_y
-
-	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20):
+		self.l1x_gridsearch_range_ = l1x_range
+		self.l1y_gridsearch_range_ = l1y_range
+		self.gridsearch_maxncomp_ = max_n_comp
+	def plot_gridsearch(self, component = None, png_basename = None, cmap = 'jet'):
+		if component is not None:
+			vmax = np.max(self.Q2_GRIDSEARCH_)
+			vmin = 0
+			Q2_SEARCH = np.array(self.Q2_GRIDSEARCH_[component-1]).T
+			if nan_unstable:
+				Q2_SEARCH[Q2_SEARCH < 0] = np.nan
+			else:
+				Q2_SEARCH[Q2_SEARCH < 0] = 0
+			plt.imshow(Q2_SEARCH, interpolation = None, cmap = cmap, vmin = vmin, vmax = vmax)
+			plt.xticks(range(len(l1x_range)),[s[:3] for s in l1x_range.astype(str)])
+			plt.xlabel('L1(X) Penalty')
+			plt.yticks(range(len(l1y_range)),[s[:3] for s in l1y_range.astype(str)])
+			plt.ylabel('L1(Y) Penalty')
+			plt.colorbar()
+			plt.title("Q-Squared [CV] Component %d" % component)
+			plt.gca().invert_yaxis()
+			plt.tight_layout(pad=0.5, w_pad=0, h_pad=0)
+			if png_basename is not None:
+				plt.savefig("%s_gridsearch_Q2_component%d.png" % (png_basename, component))
+				plt.close()
+			else:
+				plt.show()
+		else:
+			for c in range(self.gridsearch_maxncomp_):
+				component = int(c+1)
+				vmax = np.max(self.Q2_GRIDSEARCH_)
+				vmin = 0
+				Q2_SEARCH = np.array(self.Q2_GRIDSEARCH_[c]).T
+				if nan_unstable:
+					Q2_SEARCH[Q2_SEARCH < 0] = np.nan
+				else:
+					Q2_SEARCH[Q2_SEARCH < 0] = 0
+				plt.imshow(Q2_SEARCH, interpolation = None, cmap = cmap, vmin = vmin, vmax = vmax)
+				plt.xticks(range(len(l1x_range)),[s[:3] for s in l1x_range.astype(str)])
+				plt.xlabel('L1(X) Penalty')
+				plt.yticks(range(len(l1y_range)),[s[:3] for s in l1y_range.astype(str)])
+				plt.ylabel('L1(Y) Penalty')
+				plt.colorbar()
+				plt.title("Q-Squared [CV] Component %d" % component)
+				plt.gca().invert_yaxis()
+				plt.tight_layout(pad=0.5, w_pad=0, h_pad=0)
+				if png_basename is not None:
+					plt.savefig("%s_gridsearch_Q2_component%d.png" % (png_basename, component))
+					plt.close()
+				else:
+					plt.show()
+	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20, toself = False):
 		"""
 		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
 		"""
@@ -1172,11 +1269,11 @@ class parallel_scca():
 			cvscca = scca_rwrapper(n_components = n_components,
 											X_L1_penalty = X_L1_penalty, y_L1_penalty =  y_L1_penalty,
 											max_iter = max_iter).fit(X_gtrain, Y_gtrain, calculate_loadings = True)
-			X_gtest_hat, Y_gtest_hat = cvscca.predict(X = X_gtest, y = Y_gtest)
-			X_CV_Q2[g] = explained_variance_score(X_gtest, X_gtest_hat)
-			Y_CV_Q2[g] = explained_variance_score(Y_gtest, Y_gtest_hat)
-			X_CV_Q2_roi[g] = explained_variance_score(X_gtest, X_gtest_hat, multioutput = 'raw_values')
-			Y_CV_Q2_roi[g] = explained_variance_score(Y_gtest, Y_gtest_hat, multioutput = 'raw_values')
+			X_gtest_hat, Y_gtest_hat = cvscca.predict(X = X_gtest, y = Y_gtest, toself = toself)
+			X_CV_Q2[g] = cvscca._r2score(X_gtest, X_gtest_hat)
+			Y_CV_Q2[g] = cvscca._r2score(Y_gtest, Y_gtest_hat)
+			X_CV_Q2_roi[g] = cvscca._r2score(X_gtest, X_gtest_hat, mean_r2 = False)
+			Y_CV_Q2_roi[g] = cvscca._r2score(Y_gtest, Y_gtest_hat, mean_r2 = False)
 			X_CV_redundacy[g] = cvscca.x_redundacy_variance_explained_components_
 			Y_CV_redundacy[g] = cvscca.y_redundacy_variance_explained_components_
 			CV_canonicalcorrelation[g] = cvscca.cors
@@ -1201,25 +1298,211 @@ class parallel_scca():
 										max_iter = max_iter).fit(X_Train, Y_Train, calculate_loadings = True)
 		self.R2_X_train_ = scca.x_variance_explained_
 		self.R2_Y_train_ = scca.y_variance_explained_
-		X_Train_hat, Y_Train_hat = cvscca.predict(X = X_Train, y = Y_Train)
-		self.R2_X_train_targets_ = explained_variance_score(X_Train, X_Train_hat, multioutput = 'raw_values')
-		self.R2_Y_train_targets_ = explained_variance_score(Y_Train, Y_Train_hat, multioutput = 'raw_values')
+		X_Train_hat, Y_Train_hat = scca.predict(X = X_Train, y = Y_Train)
+		self.R2_X_train_targets_ = scca._r2score(X_Train, X_Train_hat, mean_r2 = False)
+		self.R2_Y_train_targets_ = scca._r2score(Y_Train, Y_Train_hat, mean_r2 = False)
 		self.RDI_X_train_components_ = scca.x_redundacy_variance_explained_components_
 		self.RDI_Y_train_components_ = scca.y_redundacy_variance_explained_components_
 		self.canonicalcorrelation_train_ = scca.cors
+		self.X_loadings = scca.x_loadings_
+		self.Y_loadings = scca.y_loadings_
 
-		# Calculate R2P squared for test data
-		X_Test_hat, Y_Test_hat = scca.predict(X_Test, Y_Test)
-		self.R2_X_test_ = explained_variance_score(X_Test, X_Test_hat)
-		self.R2_Y_test_ = explained_variance_score(Y_Test, Y_Test_hat)
-		self.R2_X_test_targets_ = explained_variance_score(X_Test, X_Test_hat, multioutput = 'raw_values')
-		self.R2_Y_test_targets_ = explained_variance_score(Y_Test, Y_Test_hat, multioutput = 'raw_values')
+		# Calculate R2 squared for test data
+		X_Test_hat, Y_Test_hat = scca.predict(X_Test, Y_Test, toself = toself)
+		self.R2_X_test_ = scca._r2score(X_Test, X_Test_hat)
+		self.R2_Y_test_ = scca._r2score(Y_Test, Y_Test_hat)
+		self.R2_X_test_targets_ = scca._r2score(X_Test, X_Test_hat, mean_r2 = False)
+		self.R2_Y_test_targets_ = scca._r2score(Y_Test, Y_Test_hat, mean_r2 = False)
 		self.canonicalcorrelation_test_ = scca.canonicalcorr(self.X_test_, self.y_test_)
 
 		self.n_components_ = n_components
 		self.X_L1_penalty_ = X_L1_penalty
 		self.y_L1_penalty_ = y_L1_penalty
+		self.max_iter_ = max_iter
+		self.group_train_ = group_train
+		self.ugroup_train_ = ugroup_train
 		self.model_obj_ = scca
+		self.toself_ = toself
+
+	def _permute_function_scca(self, p, compute_targets = True, mask_sparsity = True, permute_loadings = False):
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		if p % 200 == 0:
+			print(p)
+		X_perm = self.index_perm(unique_arr = self.ugroup_train_,
+										arr = self.group_train_,
+										variable = self.X_train_)
+		Y_perm = self.index_perm(unique_arr = self.ugroup_train_,
+										arr = self.group_train_,
+										variable = self.y_train_)
+		perm_ssca = scca_rwrapper(n_components = self.n_components_,
+											X_L1_penalty = self.X_L1_penalty_,
+											y_L1_penalty =  self.y_L1_penalty_,
+											max_iter = self.max_iter_).fit(X_perm, Y_perm, calculate_loadings = True)
+		perm_X_Test_hat, perm_Y_Test_hat = perm_ssca.predict(self.X_test_, self.y_test_, toself = self.toself_)
+		X_VE = perm_ssca._r2score(self.X_test_, perm_X_Test_hat)
+		Y_VE = perm_ssca._r2score(self.y_test_, perm_Y_Test_hat)
+		if compute_targets:
+			X_VE_ROI = perm_ssca._r2score(self.X_test_, perm_X_Test_hat, mean_r2 = False)
+			Y_VE_ROI = perm_ssca._r2score(self.y_test_, perm_Y_Test_hat, mean_r2 = False)
+		else:
+			X_VE_ROI = None
+			Y_VE_ROI = None
+		if permute_loadings:
+			perm_X_loadings = perm_ssca.x_loadings_
+			perm_Y_loadings = perm_ssca.y_loadings_
+		else:
+			perm_X_loadings = None
+			perm_Y_loadings = None
+		X_RDI = perm_ssca.x_redundacy_variance_explained_components_
+		Y_RDI = perm_ssca.y_redundacy_variance_explained_components_
+		CANCORS = perm_ssca.canonicalcorr(self.X_test_, self.y_test_)
+		return(X_VE, Y_VE, X_RDI, Y_RDI, CANCORS, X_VE_ROI, Y_VE_ROI, perm_X_loadings, perm_Y_loadings)
+	def run_permute_scca(self, compute_targets = True, calulate_pvalues = True, permute_loadings = False):
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_scca)(p, compute_targets = compute_targets, permute_loadings = permute_loadings) for p in range(self.n_permutations))
+		perm_X_VE, perm_Y_VE, perm_X_RDI, perm_Y_RDI, perm_CANCORS, perm_X_VE_ROI, perm_Y_VE_ROI, perm_X_loadings, perm_Y_loadings = zip(*output)
+		self.perm_R2_X_test_ = np.array(perm_X_VE)
+		self.perm_R2_Y_test_ = np.array(perm_Y_VE)
+		self.perm_RDI_X_ = np.array(perm_X_RDI)
+		self.perm_RDI_Y_ = np.array(perm_Y_RDI)
+		self.perm_canonicalcorrelation_ = np.array(perm_CANCORS)
+		if compute_targets:
+			self.perm_R2_X_test_targets_ = np.array(perm_X_VE_ROI)
+			self.perm_R2_Y_test_targets_ = np.array(perm_Y_VE_ROI)
+		if permute_loadings:
+			self.perm_X_loadings_ = np.array(perm_X_loadings)
+			self.perm_Y_loadings_ = np.array(perm_Y_loadings)
+		if calulate_pvalues:
+			self.compute_permuted_pvalues()
+	def fwer_corrected_p(self, permuted_arr, target, right_tail_probability = True, apply_fwer_correction = True):
+		"""
+		Calculates the FWER corrected p-value
+		
+		Parameters
+		----------
+		permuted_arr : array
+			Array of permutations [N_permutations, N_factors]
+		target : array or float
+			statistic(s) to check against null array
+		right_tail_probability : bool
+			Use right tail distribution (default: True)
+		apply_fwer_correction : bool
+			If True, output the family-wise error rate across all factors, else output permuted p-value for each factors' distribution (default: True)
+		Returns
+		---------
+		pval_corrected : array
+			Family-wise error rate corrected p-values or permuted p-values
+		"""
+		if permuted_arr.ndim == 1:
+			permuted_arr = permuted_arr.reshape(-1,1)
+		if isinstance(target, float):
+			target = np.array([target])
+		assert target.ndim == 1, "Error: target array must be 1D array or float"
+		n_perm, n_factors = permuted_arr.shape
+		if apply_fwer_correction: 
+			permuted_arr = permuted_arr.max(1)
+			pval_corrected = np.divide(np.searchsorted(np.sort(permuted_arr), target), n_perm)
+		else:
+			if n_factors == 1:
+				pval_corrected = np.divide(np.searchsorted(np.sort(permuted_arr), target), n_perm)
+			else:
+				assert n_factors == target.shape[0], "Error: n_factors must equal length of target for elementwise comparison"
+				pval_corrected = np.zeros_like(target)
+				for i in range(n_factors):
+					pval_corrected[i] = np.divide(np.searchsorted(np.sort(permuted_arr[:,i]), target[i]), n_perm)
+		if right_tail_probability:
+			pval_corrected = 1 - pval_corrected
+		return(pval_corrected)
+	def compute_permuted_pvalues(self):
+		"""
+		Calculates p-values (and FWER p-values) using the permuted null distribution.
+		"""
+		assert hasattr(self,'perm_R2_X_test_'), "Error: no permuted variables. Run run_permute_scca first."
+		if hasattr(self,'perm_R2_X_test_targets_'):
+			self.pFWER_test_X_targets_ = self.fwer_corrected_p(self.perm_R2_X_test_targets_, self.R2_X_test_targets_)
+			self.pFWER_test_Y_targets_ = self.fwer_corrected_p(self.perm_R2_Y_test_targets_, self.R2_Y_test_targets_)
+		self.pvalue_R2_X_test_ = self.fwer_corrected_p(self.perm_R2_X_test_, self.R2_X_test_)[0]
+		self.pvalue_R2_Y_test_ = self.fwer_corrected_p(self.perm_R2_Y_test_, self.R2_Y_test_)[0]
+		self.pvalue_R2_test_ = self.fwer_corrected_p(np.sort((self.perm_R2_X_test_ + self.perm_R2_Y_test_)/2), ((self.R2_X_test_ + self.R2_Y_test_) /2))[0]
+		self.pvalue_RDI_X_train_components_ = self.fwer_corrected_p(self.perm_RDI_X_, self.RDI_X_train_components_, apply_fwer_correction = False)
+		self.pvalue_RDI_Y_train_components_ = self.fwer_corrected_p(self.perm_RDI_Y_, self.RDI_Y_train_components_, apply_fwer_correction = False)
+		self.pvalue_perm_canonicalcorrelation_ = self.fwer_corrected_p(self.perm_canonicalcorrelation_, self.canonicalcorrelation_test_, apply_fwer_correction = False)
+	def plot_model(self, n_jitters = 1000, png_basename = None, add_Q2_from_train = False):
+		assert hasattr(self,'pvalue_R2_test_'), "Error: Run compute_permuted_pvalues"
+		if n_jitters > self.n_permutations:
+			n_jitters = self.n_permutations
+		n_plots = pscca.n_components_ + 2
+		p_num = 1
+		plt.subplots(figsize=(int(2*n_plots), 6), dpi=100, tight_layout = True, sharey='row')
+		plt.subplot(1, n_plots, p_num)
+		jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+		rand_dots = pscca.perm_R2_X_test_[:n_jitters]
+		plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+		plt.xlim(-.5, .5)
+		plt.ylabel("R2_X predicted vs actual (Test Data)")
+		plt.title("Model(X)")
+		plt.scatter(0, pscca.R2_X_test_, marker = 'o', alpha = 1.0, c = 'k')
+		if add_Q2_from_train:
+			plt.errorbar(0.1, pscca.Q2_X_train_, pscca.Q2_X_train_std_, linestyle='None', marker='.', c = 'r', alpha = 0.5)
+		plt.xticks(color='w')
+		p_num += 1
+		x1,x2,y1,_ = plt.axis()
+		y1 = round(y1,3) - 0.01
+		y2 = np.max(pscca.R2_X_test_)
+		if np.max(pscca.R2_X_test_) > y2:
+			y2 =np.max(pscca.R2_X_test_)
+		if np.max(np.squeeze(pscca.perm_R2_X_test_)) > y2:
+			y2 = np.max(np.squeeze(pscca.perm_R2_X_test_))
+		if np.max(np.squeeze(pscca.perm_R2_Y_test_)) > y2:
+			y2 = np.max(np.squeeze(pscca.perm_R2_Y_test_))
+		y2 = round(y2,3) + 0.01
+		if pscca.pvalue_R2_test_ == 0:
+			plt.xlabel("R2=%1.3f, P<%1.1e" % (pscca.R2_X_test_, (1 / pscca.n_permutations)), fontsize=10)
+		else:
+			plt.xlabel("R2=%1.3f, P=%1.1e" % (pscca.R2_X_test_, pscca.pvalue_R2_X_test_), fontsize=10)
+		plt.ylim(y1, y2)
+		plt.subplot(1, n_plots, p_num)
+		jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+		rand_dots = pscca.perm_R2_Y_test_[:n_jitters]
+		plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+		plt.xlim(-.5, .5)
+		plt.ylabel("R2_Y predicted vs actual (Test Data)")
+		plt.title("Model(Y)")
+		plt.scatter(0, pscca.R2_Y_test_, marker = 'o', alpha = 1.0, c = 'k')
+		if add_Q2_from_train:
+			plt.errorbar(0.1, pscca.Q2_Y_train_, pscca.Q2_Y_train_std_, linestyle='None', marker='.', c = 'r', alpha = 0.5)
+		plt.xticks(color='w')
+		p_num += 1
+		plt.ylim(y1, y2)
+		if pscca.pvalue_R2_Y_test_ == 0:
+			plt.xlabel("R2=%1.3f, P<%1.1e" % (pscca.R2_Y_test_, (1 / pscca.n_permutations)), fontsize=10)
+		else:
+			plt.xlabel("R2=%1.3f, P=%1.1e" % (pscca.R2_Y_test_, pscca.pvalue_R2_Y_test_), fontsize=10)
+		y1 =  round(np.min(np.concatenate((pscca.canonicalcorrelation_test_, (pscca.perm_canonicalcorrelation_).flatten()))),3) - 0.01
+		y2 =  round(np.max(np.concatenate((pscca.canonicalcorrelation_test_, (pscca.perm_canonicalcorrelation_).flatten()))),3) + 0.01
+		for c in range(pscca.n_components_):
+			plt.subplot(1, n_plots, p_num)
+			jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+			rand_dots = pscca.perm_canonicalcorrelation_[:n_jitters, c]
+			plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+			plt.xlim(-.5, .5)
+			plt.title("Component %d" % (c+1))
+			plt.scatter(0, pscca.canonicalcorrelation_test_[c], marker = 'o', alpha = 1.0, c = 'k')
+			plt.xticks(color='w')
+			plt.ylim(y1, y2)
+			if pscca.pvalue_perm_canonicalcorrelation_[c] == 0:
+				plt.xlabel("r=%1.3f, P<%1.2e" % (pscca.canonicalcorrelation_test_[c], (1 / pscca.n_permutations)), fontsize=10)
+			elif pscca.pvalue_perm_canonicalcorrelation_[c] > 0.001:
+				plt.xlabel("r=%1.3f, P=%1.3f" % (pscca.canonicalcorrelation_test_[c], pscca.pvalue_perm_canonicalcorrelation_[c]), fontsize=10)
+			else:
+				plt.xlabel("r=%1.3f, P=%1.2e" % (pscca.canonicalcorrelation_test_[c], pscca.pvalue_perm_canonicalcorrelation_[c]), fontsize=10)
+			p_num += 1
+		if png_basename is not None:
+			plt.savefig("%s_model_fit_to_test_with_null.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+
 
 class scca_rwrapper:
 	"""
@@ -1232,7 +1515,7 @@ class scca_rwrapper:
 	Set force_pma to false to use sparsecca package (cca_pmd) which provides identical results to R PMA library with option to the R package
 	https://github.com/Teekuningas/sparsecca
 	
-	default sets force_pma = True because the R implementation is slighlty faster (16 Thread Ryzen 7: sparsecca is 380ms and PMA is 300ms) => optimize the pycode ? 
+	default sets force_pma = True because the R implementation is slighlty faster (16 Thread Ryzen 7: sparsecca is 380ms and PMA is 300ms) => optimize the cython/c ? 
 	
 	References:
 
@@ -1242,7 +1525,7 @@ class scca_rwrapper:
 	Witten, D. M., & Tibshirani, R. J. (2009). Extensions of Sparse Canonical Correlation Analysis with Applications to Genomic Data.
 	Statistical Applications in Genetics and Molecular Biology, 8(1), 29. http://doi.org/10.2202/1544-6115.1470
 	"""
-	def __init__(self, n_components, X_L1_penalty = 0.3, y_L1_penalty = 0.3, max_iter = 100, scale_x = True, scale_y = True, force_pma = True):
+	def __init__(self, n_components, X_L1_penalty = 0.3, y_L1_penalty = 0.3, max_iter = 100, scale_x = True, scale_y = True, force_pma = True, effective_zero = 1e-15):
 		self.n_components = n_components
 		assert (X_L1_penalty > 0) and (X_L1_penalty <= 1), "Error: X_L1_penalty must be between 0 and 1"
 		assert (y_L1_penalty > 0) and (y_L1_penalty <= 1), "Error: y_L1_penalty must be between 0 and 1"
@@ -1253,6 +1536,7 @@ class scca_rwrapper:
 		self.scale_y = scale_y
 		self.penalty = "l1"
 		self.force_pma = force_pma
+		self.effective_zero = effective_zero
 	def fit(self, X, y, calculate_loadings = True):
 		"""
 		Fit for scca model. The functions saves outputs using sklearn's naming convention.
@@ -1339,8 +1623,11 @@ class scca_rwrapper:
 			self.x_redundacy_variance_explained_global_ = np.sum(self.x_redundacy_variance_explained_components_)
 			self.y_redundacy_variance_explained_components_ = np.mean(self.y_loadings_**2)*(self.cors**2)
 			self.y_redundacy_variance_explained_global_ = np.sum(self.y_redundacy_variance_explained_components_)
-			self.x_variance_explained_ = r2_score(self.X_, np.dot(self.x_scores_, pinv(self.x_weights_)))
-			self.y_variance_explained_ = r2_score(self.y_, np.dot(self.y_scores_, pinv(self.y_weights_)))
+			X_hat, Y_hat = self.predict(X = X, y = y)
+			self.x_variance_explained_ = self._r2score(self.X_, X_hat)
+			self.y_variance_explained_ = self._r2score(self.y_, Y_hat)
+			self.x_variance_explained_selected_ = self._r2score(self.X_[:,self.x_selectedvariablesindex_==1], X_hat[:,self.x_selectedvariablesindex_==1])
+			self.y_variance_explained_selected_ = self._r2score(self.y_[:,self.y_selectedvariablesindex_==1], Y_hat[:,self.y_selectedvariablesindex_==1])
 		return(self)
 	def transform(self, X = None, y = None):
 		"""
@@ -1371,22 +1658,41 @@ class scca_rwrapper:
 		y_scores = np.dot(y, self.y_weights_)
 		cancors = np.corrcoef(x_scores.T, y_scores.T).diagonal(self.n_components)
 		return(cancors)
-	def predict(self, X = None, y = None):
+	def _r2score(self, true, predicted, mean_r2 = True):
+		true = np.array(true.T)
+		predicted = np.array(predicted.T)
+		score = np.corrcoef(true,scale(predicted)).diagonal(len(true))
+		score = np.sign(score) * score**2
+		if mean_r2:
+			return(np.mean(score))
+		else:
+			return(score)
+	def predict(self, X = None, y = None, toself = False):
 		"""
 		Predict X or y by calculating canonical scores from the model, and then dotting be the inverse of the model weights by the canonical scores.
 		"""
 		if X is not None:
-			X = scale(X)
 			x_scores = np.dot(X, self.x_weights_)
-			x_predicted = np.dot(x_scores, pinv(self.x_weights_))
+			if toself: # to self may be useful for optimization...
+				x_predicted = scale(np.dot(pinv(self.x_weights_, rcond=self.effective_zero).T, x_scores.T).T)
+			else:
+				y_predicted = scale(np.dot(pinv(self.y_weights_, rcond=self.effective_zero).T, x_scores.T).T)
 		else:
-			x_predicted = None
+			if toself:
+				x_predicted = None
+			else:
+				y_predicted = None
 		if y is not None:
-			y = scale(y)
 			y_scores = np.dot(y, self.y_weights_)
-			y_predicted = np.dot(y_scores, pinv(self.y_weights_))
+			if toself:
+				y_predicted = scale(np.dot(pinv(self.y_weights_, rcond=self.effective_zero).T, y_scores.T).T)
+			else:
+				x_predicted = scale(np.dot(pinv(self.x_weights_, rcond=self.effective_zero).T, y_scores.T).T)
 		else:
-			y_predicted = None
+			if toself:
+				y_predicted = None
+			else:
+				x_predicted = None
 		return(x_predicted, y_predicted)
 
 class spls_rwrapper:
