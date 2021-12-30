@@ -9,6 +9,7 @@ from scipy.linalg import pinv
 from statsmodels.stats.multitest import multipletests
 from joblib import Parallel, delayed
 
+from sklearn.preprocessing import scale
 from sklearn.metrics import r2_score, mean_squared_error, explained_variance_score
 from sklearn.cross_decomposition import PLSRegression, CCA, PLSCanonical
 
@@ -1187,7 +1188,9 @@ class parallel_scca():
 		self.l1x_gridsearch_range_ = l1x_range
 		self.l1y_gridsearch_range_ = l1y_range
 		self.gridsearch_maxncomp_ = max_n_comp
-	def plot_gridsearch(self, component = None, png_basename = None, cmap = 'jet'):
+	def plot_gridsearch(self, component = None, png_basename = None, nan_unstable = False, cmap = 'jet'):
+		l1x_range = self.l1x_gridsearch_range_
+		l1y_range = self.l1y_gridsearch_range_
 		if component is not None:
 			vmax = np.max(self.Q2_GRIDSEARCH_)
 			vmin = 0
@@ -1234,6 +1237,12 @@ class parallel_scca():
 					plt.close()
 				else:
 					plt.show()
+
+	def _pearsonr_to_t(self, r, N):
+		tvalues = r / np.sqrt(np.divide((1-(r*r)),(N-2)))
+		pvalues = t.sf(np.abs(tvalues), N-1)*2
+		return(tvalues, pvalues)
+
 	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20, toself = False):
 		"""
 		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
@@ -1276,7 +1285,7 @@ class parallel_scca():
 			Y_CV_Q2_roi[g] = cvscca._r2score(Y_gtest, Y_gtest_hat, mean_r2 = False)
 			X_CV_redundacy[g] = cvscca.x_redundacy_variance_explained_components_
 			Y_CV_redundacy[g] = cvscca.y_redundacy_variance_explained_components_
-			CV_canonicalcorrelation[g] = cvscca.cors
+			CV_canonicalcorrelation[g] = cvscca.canonicalcorr(self.X_gtest, self.Y_gtest)
 		self.Q2_X_train_ = X_CV_Q2.mean(0)
 		self.Q2_Y_train_ = Y_CV_Q2.mean(0)
 		self.Q2_X_train_std_ = X_CV_Q2.std(0)
@@ -1304,6 +1313,7 @@ class parallel_scca():
 		self.RDI_X_train_components_ = scca.x_redundacy_variance_explained_components_
 		self.RDI_Y_train_components_ = scca.y_redundacy_variance_explained_components_
 		self.canonicalcorrelation_train_ = scca.cors
+		self.canonicalcorrelation_train_p_ = _pearsonr_to_t(scca.cors, len(scca.X_train_))[1]
 		self.X_loadings = scca.x_loadings_
 		self.Y_loadings = scca.y_loadings_
 
@@ -1314,6 +1324,7 @@ class parallel_scca():
 		self.R2_X_test_targets_ = scca._r2score(X_Test, X_Test_hat, mean_r2 = False)
 		self.R2_Y_test_targets_ = scca._r2score(Y_Test, Y_Test_hat, mean_r2 = False)
 		self.canonicalcorrelation_test_ = scca.canonicalcorr(self.X_test_, self.y_test_)
+		self.canonicalcorrelation_test_p_ = _pearsonr_to_t(self.canonicalcorrelation_test_, len(self.X_test_))[1]
 
 		self.n_components_ = n_components
 		self.X_L1_penalty_ = X_L1_penalty
