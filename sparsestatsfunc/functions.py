@@ -1313,7 +1313,7 @@ class parallel_scca():
 		self.RDI_X_train_components_ = scca.x_redundacy_variance_explained_components_
 		self.RDI_Y_train_components_ = scca.y_redundacy_variance_explained_components_
 		self.canonicalcorrelation_train_ = scca.cors
-		self.canonicalcorrelation_train_p_ = _pearsonr_to_t(scca.cors, len(scca.X_train_))[1]
+		self.canonicalcorrelation_train_p_ = self._pearsonr_to_t(scca.cors, len(scca.X_train_))[1]
 		self.X_loadings = scca.x_loadings_
 		self.Y_loadings = scca.y_loadings_
 
@@ -1324,7 +1324,7 @@ class parallel_scca():
 		self.R2_X_test_targets_ = scca._r2score(X_Test, X_Test_hat, mean_r2 = False)
 		self.R2_Y_test_targets_ = scca._r2score(Y_Test, Y_Test_hat, mean_r2 = False)
 		self.canonicalcorrelation_test_ = scca.canonicalcorr(self.X_test_, self.y_test_)
-		self.canonicalcorrelation_test_p_ = _pearsonr_to_t(self.canonicalcorrelation_test_, len(self.X_test_))[1]
+		self.canonicalcorrelation_test_p_ = self._pearsonr_to_t(self.canonicalcorrelation_test_, len(self.X_test_))[1]
 
 		self.n_components_ = n_components
 		self.X_L1_penalty_ = X_L1_penalty
