@@ -1188,7 +1188,7 @@ class parallel_scca():
 		self.l1x_gridsearch_range_ = l1x_range
 		self.l1y_gridsearch_range_ = l1y_range
 		self.gridsearch_maxncomp_ = max_n_comp
-	def plot_gridsearch(self, component = None, png_basename = None, nan_unstable = False, cmap = 'jet'):
+	def plot_gridsearch(self, png_basename = None, component = None, nan_unstable = False, cmap = 'jet'):
 		l1x_range = self.l1x_gridsearch_range_
 		l1y_range = self.l1y_gridsearch_range_
 		if component is not None:
@@ -1285,7 +1285,7 @@ class parallel_scca():
 			Y_CV_Q2_roi[g] = cvscca._r2score(Y_gtest, Y_gtest_hat, mean_r2 = False)
 			X_CV_redundacy[g] = cvscca.x_redundacy_variance_explained_components_
 			Y_CV_redundacy[g] = cvscca.y_redundacy_variance_explained_components_
-			CV_canonicalcorrelation[g] = cvscca.canonicalcorr(self.X_gtest, self.Y_gtest)
+			CV_canonicalcorrelation[g] = cvscca.canonicalcorr(X_gtest, Y_gtest)
 		self.Q2_X_train_ = X_CV_Q2.mean(0)
 		self.Q2_Y_train_ = Y_CV_Q2.mean(0)
 		self.Q2_X_train_std_ = X_CV_Q2.std(0)
@@ -1684,7 +1684,7 @@ class scca_rwrapper:
 		"""
 		if X is not None:
 			x_scores = np.dot(X, self.x_weights_)
-			if toself: # to self may be useful for optimization...
+			if toself: # toself may be useful for optimization...
 				x_predicted = scale(np.dot(pinv(self.x_weights_, rcond=self.effective_zero).T, x_scores.T).T)
 			else:
 				y_predicted = scale(np.dot(pinv(self.y_weights_, rcond=self.effective_zero).T, x_scores.T).T)
@@ -1888,6 +1888,7 @@ class proximal_gradient_lasso_regression:
 		# set the learning rate (gamma) to be the maximum eigenvalue of X'X
 		gamma = np.max(np.linalg.eigh(np.dot(X_.T, X_))[0])**-1
 		beta = np.zeros((X.shape[1], y.shape[1]))
+		# this should really be written in c or cython
 		for _ in range (self.max_iter):
 			nabla = -np.dot(X_.T,(y_c - np.dot(X_, beta)))
 			z = beta - 2*gamma*nabla
@@ -1945,7 +1946,7 @@ class ridge_regression:
 		X_ = self.zscaler(X)
 		X_lambda = np.vstack((self.stack_ones(X_), self.stack_zeros(np.diag([np.sqrt(self.l)]*X.shape[1]))))
 		Y_lambda = np.vstack((y, np.zeros((X.shape[1],y.shape[1]))))
-		self.coef = cy_lin_lstsqr_mat(X_lambda,Y_lambda)
+		self.coef = cy_lin_lstsqr_mat(X_lambda, Y_lambda)
 	def predict(self, X):
 		X_ = self.zscaler(X)
 		X_ = self.stack_ones(X_)
