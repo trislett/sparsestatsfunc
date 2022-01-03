@@ -1247,6 +1247,7 @@ class parallel_scca():
 		"""
 		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
 		"""
+		assert hasattr(self,'X_train_'), "Error: run create_nfold"
 		
 		X_Train = self.X_train_
 		Y_Train = self.y_train_
@@ -1334,6 +1335,7 @@ class parallel_scca():
 		self.ugroup_train_ = ugroup_train
 		self.model_obj_ = scca
 		self.toself_ = toself
+		self.calc_squared_correlation = calc_squared_correlation
 
 	def _permute_function_scca(self, p, compute_targets = True, mask_sparsity = True, calc_squared_correlation = True, permute_loadings = False):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
@@ -1368,9 +1370,9 @@ class parallel_scca():
 		Y_RDI = perm_ssca.y_redundacy_variance_explained_components_
 		CANCORS = perm_ssca.canonicalcorr(self.X_test_, self.y_test_)
 		return(X_VE, Y_VE, X_RDI, Y_RDI, CANCORS, X_VE_ROI, Y_VE_ROI, perm_X_loadings, perm_Y_loadings)
-	def run_permute_scca(self, compute_targets = True, calulate_pvalues = True, calc_squared_correlation = True, permute_loadings = False):
+	def run_permute_scca(self, compute_targets = True, calulate_pvalues = True, permute_loadings = False):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
-		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_scca)(p, compute_targets = compute_targets, permute_loadings = permute_loadings, calc_squared_correlation = calc_squared_correlation) for p in range(self.n_permutations))
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_scca)(p, compute_targets = compute_targets, permute_loadings = permute_loadings, calc_squared_correlation = self.calc_squared_correlation) for p in range(self.n_permutations))
 		perm_X_VE, perm_Y_VE, perm_X_RDI, perm_Y_RDI, perm_CANCORS, perm_X_VE_ROI, perm_Y_VE_ROI, perm_X_loadings, perm_Y_loadings = zip(*output)
 		self.perm_R2_X_test_ = np.array(perm_X_VE)
 		self.perm_R2_Y_test_ = np.array(perm_Y_VE)
