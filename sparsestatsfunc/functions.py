@@ -1243,7 +1243,7 @@ class parallel_scca():
 		pvalues = t.sf(np.abs(tvalues), N-1)*2
 		return(tvalues, pvalues)
 
-	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20, toself = False):
+	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20, calc_squared_correlation = True, toself = False):
 		"""
 		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
 		"""
@@ -1279,10 +1279,10 @@ class parallel_scca():
 											X_L1_penalty = X_L1_penalty, y_L1_penalty =  y_L1_penalty,
 											max_iter = max_iter).fit(X_gtrain, Y_gtrain, calculate_loadings = True)
 			X_gtest_hat, Y_gtest_hat = cvscca.predict(X = X_gtest, y = Y_gtest, toself = toself)
-			X_CV_Q2[g] = cvscca._r2score(X_gtest, X_gtest_hat)
-			Y_CV_Q2[g] = cvscca._r2score(Y_gtest, Y_gtest_hat)
-			X_CV_Q2_roi[g] = cvscca._r2score(X_gtest, X_gtest_hat, mean_r2 = False)
-			Y_CV_Q2_roi[g] = cvscca._r2score(Y_gtest, Y_gtest_hat, mean_r2 = False)
+			X_CV_Q2[g] = cvscca._r2score(X_gtest, X_gtest_hat, squared = calc_squared_correlation)
+			Y_CV_Q2[g] = cvscca._r2score(Y_gtest, Y_gtest_hat, squared = calc_squared_correlation)
+			X_CV_Q2_roi[g] = cvscca._r2score(X_gtest, X_gtest_hat, mean_r2 = False, squared = calc_squared_correlation)
+			Y_CV_Q2_roi[g] = cvscca._r2score(Y_gtest, Y_gtest_hat, mean_r2 = False, squared = calc_squared_correlation)
 			X_CV_redundacy[g] = cvscca.x_redundacy_variance_explained_components_
 			Y_CV_redundacy[g] = cvscca.y_redundacy_variance_explained_components_
 			CV_canonicalcorrelation[g] = cvscca.canonicalcorr(X_gtest, Y_gtest)
@@ -1308,8 +1308,8 @@ class parallel_scca():
 		self.R2_X_train_ = scca.x_variance_explained_
 		self.R2_Y_train_ = scca.y_variance_explained_
 		X_Train_hat, Y_Train_hat = scca.predict(X = X_Train, y = Y_Train)
-		self.R2_X_train_targets_ = scca._r2score(X_Train, X_Train_hat, mean_r2 = False)
-		self.R2_Y_train_targets_ = scca._r2score(Y_Train, Y_Train_hat, mean_r2 = False)
+		self.R2_X_train_targets_ = scca._r2score(X_Train, X_Train_hat, mean_r2 = False, squared = calc_squared_correlation)
+		self.R2_Y_train_targets_ = scca._r2score(Y_Train, Y_Train_hat, mean_r2 = False, squared = calc_squared_correlation)
 		self.RDI_X_train_components_ = scca.x_redundacy_variance_explained_components_
 		self.RDI_Y_train_components_ = scca.y_redundacy_variance_explained_components_
 		self.canonicalcorrelation_train_ = scca.cors
@@ -1319,10 +1319,10 @@ class parallel_scca():
 
 		# Calculate R2 squared for test data
 		X_Test_hat, Y_Test_hat = scca.predict(X_Test, Y_Test, toself = toself)
-		self.R2_X_test_ = scca._r2score(X_Test, X_Test_hat)
-		self.R2_Y_test_ = scca._r2score(Y_Test, Y_Test_hat)
-		self.R2_X_test_targets_ = scca._r2score(X_Test, X_Test_hat, mean_r2 = False)
-		self.R2_Y_test_targets_ = scca._r2score(Y_Test, Y_Test_hat, mean_r2 = False)
+		self.R2_X_test_ = scca._r2score(X_Test, X_Test_hat, squared = calc_squared_correlation)
+		self.R2_Y_test_ = scca._r2score(Y_Test, Y_Test_hat, squared = calc_squared_correlation)
+		self.R2_X_test_targets_ = scca._r2score(X_Test, X_Test_hat, mean_r2 = False, squared = calc_squared_correlation)
+		self.R2_Y_test_targets_ = scca._r2score(Y_Test, Y_Test_hat, mean_r2 = False, squared = calc_squared_correlation)
 		self.canonicalcorrelation_test_ = scca.canonicalcorr(self.X_test_, self.y_test_)
 		self.canonicalcorrelation_test_p_ = self._pearsonr_to_t(self.canonicalcorrelation_test_, len(self.X_test_))[1]
 
@@ -1335,7 +1335,7 @@ class parallel_scca():
 		self.model_obj_ = scca
 		self.toself_ = toself
 
-	def _permute_function_scca(self, p, compute_targets = True, mask_sparsity = True, permute_loadings = False):
+	def _permute_function_scca(self, p, compute_targets = True, mask_sparsity = True, calc_squared_correlation = True, permute_loadings = False):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		if p % 200 == 0:
 			print(p)
@@ -1350,11 +1350,11 @@ class parallel_scca():
 											y_L1_penalty =  self.y_L1_penalty_,
 											max_iter = self.max_iter_).fit(X_perm, Y_perm, calculate_loadings = True)
 		perm_X_Test_hat, perm_Y_Test_hat = perm_ssca.predict(self.X_test_, self.y_test_, toself = self.toself_)
-		X_VE = perm_ssca._r2score(self.X_test_, perm_X_Test_hat)
-		Y_VE = perm_ssca._r2score(self.y_test_, perm_Y_Test_hat)
+		X_VE = perm_ssca._r2score(self.X_test_, perm_X_Test_hat, squared = calc_squared_correlation)
+		Y_VE = perm_ssca._r2score(self.y_test_, perm_Y_Test_hat, squared = calc_squared_correlation)
 		if compute_targets:
-			X_VE_ROI = perm_ssca._r2score(self.X_test_, perm_X_Test_hat, mean_r2 = False)
-			Y_VE_ROI = perm_ssca._r2score(self.y_test_, perm_Y_Test_hat, mean_r2 = False)
+			X_VE_ROI = perm_ssca._r2score(self.X_test_, perm_X_Test_hat, mean_r2 = False, squared = calc_squared_correlation)
+			Y_VE_ROI = perm_ssca._r2score(self.y_test_, perm_Y_Test_hat, mean_r2 = False, squared = calc_squared_correlation)
 		else:
 			X_VE_ROI = None
 			Y_VE_ROI = None
@@ -1368,9 +1368,9 @@ class parallel_scca():
 		Y_RDI = perm_ssca.y_redundacy_variance_explained_components_
 		CANCORS = perm_ssca.canonicalcorr(self.X_test_, self.y_test_)
 		return(X_VE, Y_VE, X_RDI, Y_RDI, CANCORS, X_VE_ROI, Y_VE_ROI, perm_X_loadings, perm_Y_loadings)
-	def run_permute_scca(self, compute_targets = True, calulate_pvalues = True, permute_loadings = False):
+	def run_permute_scca(self, compute_targets = True, calulate_pvalues = True, calc_squared_correlation = True, permute_loadings = False):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
-		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_scca)(p, compute_targets = compute_targets, permute_loadings = permute_loadings) for p in range(self.n_permutations))
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_scca)(p, compute_targets = compute_targets, permute_loadings = permute_loadings, calc_squared_correlation = calc_squared_correlation) for p in range(self.n_permutations))
 		perm_X_VE, perm_Y_VE, perm_X_RDI, perm_Y_RDI, perm_CANCORS, perm_X_VE_ROI, perm_Y_VE_ROI, perm_X_loadings, perm_Y_loadings = zip(*output)
 		self.perm_R2_X_test_ = np.array(perm_X_VE)
 		self.perm_R2_Y_test_ = np.array(perm_Y_VE)
@@ -1669,11 +1669,12 @@ class scca_rwrapper:
 		y_scores = np.dot(y, self.y_weights_)
 		cancors = np.corrcoef(x_scores.T, y_scores.T).diagonal(self.n_components)
 		return(cancors)
-	def _r2score(self, true, predicted, mean_r2 = True):
+	def _r2score(self, true, predicted, mean_r2 = True, squared = True):
 		true = np.array(true.T)
 		predicted = np.array(predicted.T)
-		score = np.corrcoef(true,scale(predicted)).diagonal(len(true))
-		score = np.sign(score) * score**2
+		score = np.corrcoef(true, scale(predicted)).diagonal(len(true))
+		if squared:
+			score = np.sign(score) * score**2
 		if mean_r2:
 			return(np.mean(score))
 		else:
