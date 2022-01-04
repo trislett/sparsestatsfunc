@@ -1314,9 +1314,20 @@ class parallel_scca():
 		self.RDI_X_train_components_ = scca.x_redundacy_variance_explained_components_
 		self.RDI_Y_train_components_ = scca.y_redundacy_variance_explained_components_
 		self.canonicalcorrelation_train_ = scca.cors
-		self.canonicalcorrelation_train_p_ = self._pearsonr_to_t(scca.cors, len(scca.X_))[1]
+		self.pvalue_canonicalcorrelation_train_ = self._pearsonr_to_t(scca.cors, len(scca.X_))[1]
 		self.X_loadings = scca.x_loadings_
 		self.Y_loadings = scca.y_loadings_
+		if not calc_squared_correlation:
+			self.pvalue_X_train_ = self._pearsonr_to_t(self.R2_X_train_, len(X_Train))[1]
+			t,p = self._pearsonr_to_t(self.R2_X_train_targets_, len(X_Train))
+			self.pvalue_X_train_targets_ = p
+			self.tvalue_X_train_targets_ = t
+			self.qvalue_X_train_targets_ = fdrcorrection(p)[1]
+			self.pvalue_Y_train_ = self._pearsonr_to_t(self.R2_Y_train_, len(Y_Test))[1]
+			t,p = self._pearsonr_to_t(self.R2_Y_train_targets_, len(Y_Test))
+			self.pvalue_Y_train_targets_ = p
+			self.tvalue_Y_train_targets_ = t
+			self.qvalue_Y_train_targets_ = fdrcorrection(p)[1]
 
 		# Calculate R2 squared for test data
 		X_Test_hat, Y_Test_hat = scca.predict(X_Test, Y_Test, toself = toself)
@@ -1332,7 +1343,7 @@ class parallel_scca():
 			self.pvalue_X_test_targets_ = p
 			self.tvalue_X_test_targets_ = t
 			self.qvalue_X_test_targets_ = fdrcorrection(p)[1]
-			self.pvalue_X_test_ = self._pearsonr_to_t(self.R2_Y_test_, len(Y_Test))[1]
+			self.pvalue_Y_test_ = self._pearsonr_to_t(self.R2_Y_test_, len(Y_Test))[1]
 			t,p = self._pearsonr_to_t(self.R2_Y_test_targets_, len(Y_Test))
 			self.pvalue_Y_test_targets_ = p
 			self.tvalue_Y_test_targets_ = t
@@ -1449,58 +1460,60 @@ class parallel_scca():
 		self.perm_pvalue_R2_test_ = self.fwer_corrected_p(np.sort((self.perm_R2_X_test_ + self.perm_R2_Y_test_)/2), ((self.R2_X_test_ + self.R2_Y_test_) /2))[0]
 		self.perm_pvalue_RDI_X_train_components_ = self.fwer_corrected_p(self.perm_RDI_X_, self.RDI_X_train_components_, apply_fwer_correction = False)
 		self.perm_pvalue_RDI_Y_train_components_ = self.fwer_corrected_p(self.perm_RDI_Y_, self.RDI_Y_train_components_, apply_fwer_correction = False)
-		self.perm_pvalue_perm_canonicalcorrelation_ = self.fwer_corrected_p(self.perm_canonicalcorrelation_, self.canonicalcorrelation_test_, apply_fwer_correction = False)
-	def plot_model(self, n_jitters = 1000, png_basename = None, add_Q2_from_train = False):
-		assert hasattr(self,'pvalue_R2_test_'), "Error: Run compute_permuted_pvalues"
+		self.perm_pvalue_canonicalcorrelation_ = self.fwer_corrected_p(self.perm_canonicalcorrelation_, self.canonicalcorrelation_test_, apply_fwer_correction = False)
+	def plot_permuted_canonical_correlations(self, png_basename = None, n_jitters = 1000, add_Q2_from_train = False, plot_model = False):
+		assert hasattr(self,'perm_pvalue_R2_test_'), "Error: Run compute_permuted_pvalues"
 		if n_jitters > self.n_permutations:
 			n_jitters = self.n_permutations
-		n_plots = self.n_components_ + 2
 		p_num = 1
+		n_plots = self.n_components_ 
 		plt.subplots(figsize=(int(2*n_plots), 6), dpi=100, tight_layout = True, sharey='row')
-		plt.subplot(1, n_plots, p_num)
-		jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
-		rand_dots = self.perm_R2_X_test_[:n_jitters]
-		plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
-		plt.xlim(-.5, .5)
-		plt.ylabel("R2_X predicted vs actual (Test Data)")
-		plt.title("Model(X)")
-		plt.scatter(0, self.R2_X_test_, marker = 'o', alpha = 1.0, c = 'k')
-		if add_Q2_from_train:
-			plt.errorbar(0.1, self.Q2_X_train_, self.Q2_X_train_std_, linestyle='None', marker='.', c = 'r', alpha = 0.5)
-		plt.xticks(color='w')
-		p_num += 1
-		x1,x2,y1,_ = plt.axis()
-		y1 = round(y1,3) - 0.01
-		y2 = np.max(self.R2_X_test_)
-		if np.max(self.R2_X_test_) > y2:
-			y2 =np.max(self.R2_X_test_)
-		if np.max(np.squeeze(self.perm_R2_X_test_)) > y2:
-			y2 = np.max(np.squeeze(self.perm_R2_X_test_))
-		if np.max(np.squeeze(self.perm_R2_Y_test_)) > y2:
-			y2 = np.max(np.squeeze(self.perm_R2_Y_test_))
-		y2 = round(y2,3) + 0.01
-		if self.pvalue_R2_test_ == 0:
-			plt.xlabel("R2=%1.3f, P<%1.1e" % (self.R2_X_test_, (1 / self.n_permutations)), fontsize=10)
-		else:
-			plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_X_test_, self.pvalue_R2_X_test_), fontsize=10)
-		plt.ylim(y1, y2)
-		plt.subplot(1, n_plots, p_num)
-		jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
-		rand_dots = self.perm_R2_Y_test_[:n_jitters]
-		plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
-		plt.xlim(-.5, .5)
-		plt.ylabel("R2_Y predicted vs actual (Test Data)")
-		plt.title("Model(Y)")
-		plt.scatter(0, self.R2_Y_test_, marker = 'o', alpha = 1.0, c = 'k')
-		if add_Q2_from_train:
-			plt.errorbar(0.1, self.Q2_Y_train_, self.Q2_Y_train_std_, linestyle='None', marker='.', c = 'r', alpha = 0.5)
-		plt.xticks(color='w')
-		p_num += 1
-		plt.ylim(y1, y2)
-		if self.pvalue_R2_Y_test_ == 0:
-			plt.xlabel("R2=%1.3f, P<%1.1e" % (self.R2_Y_test_, (1 / self.n_permutations)), fontsize=10)
-		else:
-			plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_Y_test_, self.pvalue_R2_Y_test_), fontsize=10)
+		if plot_model:
+			n_plots += 2
+			plt.subplot(1, n_plots, p_num)
+			jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+			rand_dots = self.perm_R2_X_test_[:n_jitters]
+			plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+			plt.xlim(-.5, .5)
+			plt.ylabel("R2_X predicted vs actual (Test Data)")
+			plt.title("Model(X)")
+			plt.scatter(0, self.R2_X_test_, marker = 'o', alpha = 1.0, c = 'k')
+			if add_Q2_from_train:
+				plt.errorbar(0.1, self.Q2_X_train_, self.Q2_X_train_std_, linestyle='None', marker='.', c = 'r', alpha = 0.5)
+			plt.xticks(color='w')
+			p_num += 1
+			x1,x2,y1,_ = plt.axis()
+			y1 = round(y1,3) - 0.01
+			y2 = np.max(self.R2_X_test_)
+			if np.max(self.R2_X_test_) > y2:
+				y2 =np.max(self.R2_X_test_)
+			if np.max(np.squeeze(self.perm_R2_X_test_)) > y2:
+				y2 = np.max(np.squeeze(self.perm_R2_X_test_))
+			if np.max(np.squeeze(self.perm_R2_Y_test_)) > y2:
+				y2 = np.max(np.squeeze(self.perm_R2_Y_test_))
+			y2 = round(y2,3) + 0.01
+			if self.perm_pvalue_R2_test_ == 0:
+				plt.xlabel("R2=%1.3f, P<%1.1e" % (self.R2_X_test_, (1 / self.n_permutations)), fontsize=10)
+			else:
+				plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_X_test_, self.pvalue_R2_X_test_), fontsize=10)
+			plt.ylim(y1, y2)
+			plt.subplot(1, n_plots, p_num)
+			jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+			rand_dots = self.perm_R2_Y_test_[:n_jitters]
+			plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+			plt.xlim(-.5, .5)
+			plt.ylabel("R2_Y predicted vs actual (Test Data)")
+			plt.title("Model(Y)")
+			plt.scatter(0, self.R2_Y_test_, marker = 'o', alpha = 1.0, c = 'k')
+			if add_Q2_from_train:
+				plt.errorbar(0.1, self.Q2_Y_train_, self.Q2_Y_train_std_, linestyle='None', marker='.', c = 'r', alpha = 0.5)
+			plt.xticks(color='w')
+			p_num += 1
+			plt.ylim(y1, y2)
+			if self.perm_pvalue_R2_Y_test_ == 0:
+				plt.xlabel("R2=%1.3f, P<%1.1e" % (self.R2_Y_test_, (1 / self.n_permutations)), fontsize=10)
+			else:
+				plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_Y_test_, self.perm_pvalue_R2_Y_test_), fontsize=10)
 		y1 =  round(np.min(np.concatenate((self.canonicalcorrelation_test_, (self.perm_canonicalcorrelation_).flatten()))),3) - 0.01
 		y2 =  round(np.max(np.concatenate((self.canonicalcorrelation_test_, (self.perm_canonicalcorrelation_).flatten()))),3) + 0.01
 		for c in range(self.n_components_):
@@ -1513,12 +1526,12 @@ class parallel_scca():
 			plt.scatter(0, self.canonicalcorrelation_test_[c], marker = 'o', alpha = 1.0, c = 'k')
 			plt.xticks(color='w')
 			plt.ylim(y1, y2)
-			if self.pvalue_perm_canonicalcorrelation_[c] == 0:
+			if self.perm_pvalue_canonicalcorrelation_[c] == 0:
 				plt.xlabel("r=%1.3f, P<%1.2e" % (self.canonicalcorrelation_test_[c], (1 / self.n_permutations)), fontsize=10)
-			elif self.pvalue_perm_canonicalcorrelation_[c] > 0.001:
-				plt.xlabel("r=%1.3f, P=%1.3f" % (self.canonicalcorrelation_test_[c], self.pvalue_perm_canonicalcorrelation_[c]), fontsize=10)
+			elif self.perm_pvalue_canonicalcorrelation_[c] > 0.001:
+				plt.xlabel("r=%1.3f, P=%1.3f" % (self.canonicalcorrelation_test_[c], self.perm_pvalue_canonicalcorrelation_[c]), fontsize=10)
 			else:
-				plt.xlabel("r=%1.3f, P=%1.2e" % (self.canonicalcorrelation_test_[c], self.pvalue_perm_canonicalcorrelation_[c]), fontsize=10)
+				plt.xlabel("r=%1.3f, P=%1.2e" % (self.canonicalcorrelation_test_[c], self.perm_pvalue_canonicalcorrelation_[c]), fontsize=10)
 			p_num += 1
 		if png_basename is not None:
 			plt.savefig("%s_model_fit_to_test_with_null.png" % png_basename)
