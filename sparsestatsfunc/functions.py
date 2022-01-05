@@ -1323,8 +1323,9 @@ class parallel_scca():
 			self.pvalue_X_train_targets_ = p
 			self.tvalue_X_train_targets_ = t
 			self.qvalue_X_train_targets_ = fdrcorrection(p)[1]
+
 			self.pvalue_Y_train_ = self._pearsonr_to_t(self.R2_Y_train_, len(Y_Test))[1]
-			t,p = self._pearsonr_to_t(self.R2_Y_train_targets_, len(Y_Test))
+			t,p = self._pearsonr_to_t(self.R2_Y_train_targets_, len(Y_Train))
 			self.pvalue_Y_train_targets_ = p
 			self.tvalue_Y_train_targets_ = t
 			self.qvalue_Y_train_targets_ = fdrcorrection(p)[1]
