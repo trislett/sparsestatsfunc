@@ -1844,6 +1844,8 @@ class spls_rwrapper:
 		X -= self.X_mean_
 		X /= self.X_std_
 		return(np.dot(X,self.coef_) + self.y_mean_)
+
+
 class linear_regression:
 	def __init__(self):
 		self.coef = None
@@ -1851,6 +1853,7 @@ class linear_regression:
 		self.coef = cy_lin_lstsqr_mat(X,Y)
 	def predict(self, X):
 		return(np.dot(X,self.coef))
+
 
 class gradient_linear_regression:
 	def __init__(self, X, y, learning_rate = 0.05, intercept = True):
@@ -1885,6 +1888,7 @@ class gradient_linear_regression:
 	def fit(self, iterations = 1000):
 		for _ in range(iterations):
 			self.update()
+
 
 class proximal_gradient_lasso_regression:
 	def __init__(self, alpha = 1.0, max_iter = 1000):
@@ -1926,6 +1930,7 @@ class proximal_gradient_lasso_regression:
 	def predict(self, X):
 		X_ = self.zscaler(X)
 		return(np.dot(X_, self.beta) + self.intercept)
+
 
 class ridge_regression:
 	def __init__(self, l = 1.):
@@ -1978,6 +1983,7 @@ class ridge_regression:
 		X_ = self.zscaler(X)
 		X_ = self.stack_ones(X_)
 		return(np.dot(X_,self.coef))
+
 
 class exogenoues_variable:
 	def __init__(self, name, dmy_arr, exog_type):
