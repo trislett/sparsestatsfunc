@@ -68,845 +68,8 @@ def zscaler_XY(X, y, axis=0, w_mean=True, scale_x = True, scale_y = True):
 		Y_ /= Y_std_
 	return(X_, Y_, X_mean_, Y_mean_, X_std_, Y_std_)
 
-
-class permute_model_parallel():
-	"""
-	Calculates PLS metrics and significance using sklearn PLSRegression and joblib locky parallelization.
-	"""
-	def __init__(self, n_jobs, n_permutations = 10000):
-		self.n_jobs = n_jobs
-		self.n_permutations = n_permutations
-	def index_perm(self, unique_arr, arr, variable, within_group = True):
-		"""
-		Shuffles an array within group (within_group = True) or the groups (within_group = False)
-		"""
-		if within_group:
-			perm_u = unique_arr
-		else:
-			perm_u = np.random.permutation(unique_arr)
-		out = []
-		for unique in perm_u:
-			if within_group:
-				out.append(np.random.permutation(variable[unique == arr]))
-			else:
-				out.append(variable[unique == arr])
-		return np.concatenate(out)
-	def check_variables(self, X_Train, Y_Train, X_Test, Y_Test):
-		X_Train, Y_Train, X_Train_mean, Y_Train_mean, X_Train_std, Y_Train_std = zscaler_XY(X = X_Train, y = Y_Train)
-		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = zscaler_XY(X = X_Test, y = Y_Test)
-		has_issue = False
-		if np.sum((X_Train_std == 0)*1) != 0:
-			print("Warning: zero standard deviation predictors detected in Training data. Printing index array")
-			print((X_Train_std != 0)*1)
-			has_issue = True
-		if np.sum((X_Test_std == 0)*1) != 0:
-			print("Warning: zero standard deviation predictors detect in Testing data. Printing index array")
-			print((X_Test_std != 0)*1)
-			has_issue = True
-		outindex = (X_Test_std != 0) * (X_Train_std != 0)
-		return(outindex)
-	def fit_model(self, X_Train, Y_Train, X_Test, Y_Test, n_components, group_train):
-		"""
-		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
-		"""
-		X_Train, Y_Train, X_Train_mean, Y_Train_mean, X_Train_std, Y_Train_std = zscaler_XY(X = X_Train, y = Y_Train)
-		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = zscaler_XY(X = X_Test, y = Y_Test)
-		ugroup_train = np.unique(group_train)
-
-		# Calculate Q2 squared
-		CV_Q2 = np.zeros((len(ugroup_train)))
-		CV_Q2_roi = np.zeros((len(ugroup_train), Y_Train.shape[1]))
-		CV_Q2_components = np.zeros((len(ugroup_train), n_components))
-		CV_Q2_components_roi = np.zeros((len(ugroup_train), n_components, Y_Train.shape[1]))
-		for g, group in enumerate(ugroup_train):
-			X_gtrain = X_Train[group_train != group]
-			Y_gtrain = Y_Train[group_train != group]
-			X_gtest = X_Train[group_train == group]
-			Y_gtest = Y_Train[group_train == group]
-			pls2 = PLSRegression(n_components = n_components).fit(X_gtrain, Y_gtrain)
-			CV_Q2[g] = explained_variance_score(Y_gtest, pls2.predict(X_gtest))
-			CV_Q2_roi[g] = explained_variance_score(Y_gtest, pls2.predict(X_gtest), multioutput = 'raw_values')
-			for c in range(n_components):
-				yhat_c = np.dot(pls2.x_scores_[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_gtrain.std(axis=0, ddof=1) + Y_gtrain.mean(axis=0)
-				CV_Q2_components[g,c] = explained_variance_score(Y_gtrain, yhat_c)
-				CV_Q2_components_roi[g,c,:] = explained_variance_score(Y_gtrain, yhat_c, multioutput = 'raw_values')
-		self.Q2_train_ = CV_Q2.mean(0)
-		self.Q2_train_std_ = CV_Q2.std(0)
-		self.Q2_train_targets_ = CV_Q2_roi.mean(0)
-		self.Q2_train_components_ = CV_Q2_components.mean(0)
-		self.Q2_train_components_std_ = CV_Q2_components.std(0)
-		self.Q2_train_components_targets_ = CV_Q2_components_roi.mean(0)
-
-		# Calculate R2 squared for training data
-		pls2 = PLSRegression(n_components = n_components).fit(X_Train, Y_Train)
-		components_variance_explained_train = []
-		components_variance_explained_train_roi = []
-		for c in range(n_components):
-			yhat_c = np.dot(pls2.x_scores_[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_Train_std + Y_Train_mean
-			components_variance_explained_train.append(explained_variance_score(Y_Train, yhat_c))
-			components_variance_explained_train_roi.append(explained_variance_score(Y_Train, yhat_c, multioutput = 'raw_values'))
-		self.R2_train_ = explained_variance_score(Y_Train, pls2.predict(X_Train))
-		self.R2_train_targets_ = explained_variance_score(Y_Train, pls2.predict(X_Train), multioutput = 'raw_values')
-		self.R2_train_components_ = np.array(components_variance_explained_train)
-		self.R2_train_components_targets_ = np.array(components_variance_explained_train_roi)
-
-		# Calculate R2P squared for test data
-		components_variance_explained_test = []
-		components_variance_explained_test_roi = []
-		x_scores_test, y_scores_test = pls2.transform(X_Test, Y_Test)
-		for c in range(n_components):
-			yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_Test.std(axis=0, ddof=1) + Y_Test.mean(axis=0)
-			components_variance_explained_test.append(explained_variance_score(Y_Test, yhat_c))
-			components_variance_explained_test_roi.append(explained_variance_score(Y_Test, yhat_c, multioutput = 'raw_values'))
-		self.R2_test_ = explained_variance_score(Y_Test, pls2.predict(X_Test))
-		self.R2_test_targets_ = explained_variance_score(Y_Test, pls2.predict(X_Test), multioutput = 'raw_values')
-		self.R2_test_components_ = np.array(components_variance_explained_test)
-		self.R2_test_components_targets_ = np.array(components_variance_explained_test_roi)
-		self.n_components_ = n_components
-		self.group_train_ = group_train
-		self.ugroup_train_ = ugroup_train
-		self.X_Train_ = X_Train
-		self.Y_Train_ = Y_Train
-		self.X_Train_mean_ = X_Train_mean
-		self.Y_Train_mean_ = Y_Train_mean
-		self.X_Train_std_ = X_Train_std
-		self.Y_Train_std_ = Y_Train_std
-		self.X_Test_ = X_Test
-		self.Y_Test_ = Y_Test
-		self.X_Test_mean_ = X_Test_mean
-		self.Y_Test_mean_ = Y_Test_mean
-		self.X_Test_std_ = X_Test_std
-		self.Y_Test_std_ = Y_Test_std
-		self.model_obj_ = pls2
-	def fwer_corrected_p(self, permuted_arr, target, right_tail_probability = True, apply_fwer_correction = True):
-		"""
-		Calculates the FWER corrected p-value
-		
-		Parameters
-		----------
-		permuted_arr : array
-			Array of permutations [N_permutations, N_factors]
-		target : array or float
-			statistic(s) to check against null array
-		right_tail_probability : bool
-			Use right tail distribution (default: True)
-		apply_fwer_correction : bool
-			If True, output the family-wise error rate across all factors, else output permuted p-value for each factors' distribution (default: True)
-		Returns
-		---------
-		pval_corrected : array
-			Family-wise error rate corrected p-values or permuted p-values
-		"""
-		if permuted_arr.ndim == 1:
-			permuted_arr = permuted_arr.reshape(-1,1)
-		if isinstance(target, float):
-			target = np.array([target])
-		assert target.ndim == 1, "Error: target array must be 1D array or float"
-		n_perm, n_factors = permuted_arr.shape
-		if apply_fwer_correction: 
-			permuted_arr = permuted_arr.max(1)
-			pval_corrected = np.divide(np.searchsorted(np.sort(permuted_arr), target), n_perm)
-		else:
-			if n_factors == 1:
-				pval_corrected = np.divide(np.searchsorted(np.sort(permuted_arr), target), n_perm)
-			else:
-				assert n_factors == target.shape[0], "Error: n_factors must equal length of target for elementwise comparison"
-				pval_corrected = np.zeros_like(target)
-				for i in range(n_factors):
-					pval_corrected[i] = np.divide(np.searchsorted(np.sort(permuted_arr[:,i]), target[i]), n_perm)
-		if right_tail_probability:
-			pval_corrected = 1 - pval_corrected
-		return(pval_corrected)
-	def permute_function_pls(self, p, compute_targets = False):
-		assert hasattr(self,'model_obj_'), "Error: run fit_model"
-		if p % 200 == 0:
-			print(p)
-		X_perm = self.index_perm(unique_arr = self.ugroup_train_,
-										arr = self.group_train_,
-										variable = self.X_Train_)
-		perm_pls2 = PLSRegression(n_components = self.n_components_).fit(X_perm, self.Y_Train_)
-		x_scores_test = perm_pls2.transform(self.X_Test_)
-		components_ve = np.zeros((self.n_components_))
-		if compute_targets:
-			components_ve_roi = np.zeros((self.n_components_, self.Y_Train_.shape[1]))
-		for c in range(self.n_components_):
-			yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), perm_pls2.y_loadings_[:,c].reshape(-1,1).T) * self.Y_Test_std_ + self.Y_Test_mean_
-			components_ve[c] = explained_variance_score(self.Y_Test_, yhat_c)
-			if compute_targets:
-				components_ve_roi[c, :] = explained_variance_score(self.Y_Test_, yhat_c, multioutput = 'raw_values')
-		ve = explained_variance_score(self.Y_Test_, perm_pls2.predict(self.X_Test_))
-		if compute_targets:
-			ve_roi = explained_variance_score(self.Y_Test_, perm_pls2.predict(self.X_Test_), multioutput = 'raw_values')
-		abs_max_coef = np.max(np.abs(perm_pls2.coef_),1)
-		if compute_targets:
-			return(ve, ve_roi, components_ve, components_ve_roi, abs_max_coef)
-		else:
-			return(ve, components_ve, abs_max_coef)
-	def run_permute_pls(self, compute_targets = True, calulate_pvalues = True):
-		assert hasattr(self,'model_obj_'), "Error: run fit_model"
-		output = Parallel(n_jobs = self.n_jobs)(delayed(self.permute_function_pls)(p, compute_targets = compute_targets) for p in range(self.n_permutations))
-		if compute_targets:
-			perm_ve, perm_ve_roi, perm_components_ve, perm_components_ve_roi, perm_abs_max_coef = zip(*output)
-			self.perm_R2_test_targets_ = np.array(perm_ve_roi)
-			self.perm_R2_test_components_targets_ = np.array(perm_components_ve_roi)
-		else:
-			perm_ve, perm_components_ve, perm_abs_max_coef = zip(*output)
-		self.perm_R2_test_ = np.array(perm_ve)
-		self.perm_R2_test_components_ = np.array(perm_components_ve)
-		self.perm_coef_fwer_ = np.array(perm_abs_max_coef)
-		if calulate_pvalues:
-			self.compute_permuted_pvalues()
-	def compute_permuted_pvalues(self):
-		"""
-		Calculates p-values (and FWER p-values) using the permuted null distribution.
-		"""
-		assert hasattr(self,'perm_R2_test_'), "Error: no permuted variables. Run run_permute_pls first."
-		if hasattr(self,'perm_R2_test_targets_'):
-			self.pFWER_test_targets_ = self.fwer_corrected_p(self.perm_R2_test_targets_, self.R2_test_targets_)
-			CompFWER = []
-			for c in range(self.n_components_):
-				CompFWER.append(self.fwer_corrected_p(self.perm_R2_test_components_targets_[:,0,:],self.R2_test_components_targets_[c]))
-			self.pFWER_test_components_targets_ = np.array(CompFWER)
-		self.pvalue_R2_test_ = self.fwer_corrected_p(self.perm_R2_test_, self.R2_test_)[0]
-		self.pvalue_R2_test_components_ = self.fwer_corrected_p(self.perm_R2_test_components_, self.R2_test_components_, apply_fwer_correction = False)
-		coef_p = []
-		for co in range(len(self.model_obj_.coef_)):
-			coef_p.append(self.fwer_corrected_p(self.perm_coef_fwer_[:,co], np.abs(self.model_obj_.coef_[co])))
-		self.pFWER_coef_ = np.array(coef_p).T 
-	def plot_model(self, n_jitters = 1000, png_basename = None, add_Q2_from_train = False):
-		assert hasattr(self,'pvalue_R2_test_'), "Error: Run compute_permuted_pvalues"
-		if n_jitters > self.n_permutations:
-			n_jitters = self.n_permutations
-		n_plots = self.n_components_ + 1
-		p_num = 1
-		plt.subplots(figsize=(int(2*n_plots), 6), dpi=100, tight_layout = True, sharey='row')
-		plt.subplot(1, n_plots, p_num)
-		jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
-		rand_dots = self.perm_R2_test_[:n_jitters]
-		plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
-		plt.xlim(-.5, .5)
-		plt.ylabel("R2 predicted vs actual (Test Data)")
-		plt.title("Model")
-		plt.scatter(0, self.R2_test_, marker = 'o', alpha = 1.0, c = 'k')
-		if add_Q2_from_train:
-			plt.errorbar(0.1, self.Q2_train_, self.Q2_train_std_, linestyle='None', marker='.', c = 'r', alpha = 0.5)
-		plt.xticks(color='w')
-		p_num += 1
-		x1,x2,y1,y2 = plt.axis()
-		y1 = round(y1,3) - 0.01
-		y2 = round(y2,3) + 0.01
-		plt.ylim(y1, y2)
-		if self.pvalue_R2_test_ == 0:
-			plt.xlabel("R2=%1.3f, P<%1.1e" % (self.R2_test_, (1 / self.n_permutations)), fontsize=10)
-		else:
-			plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_test_, self.pvalue_R2_test_), fontsize=10)
-		for c in range(self.n_components_):
-			plt.subplot(1, n_plots, p_num)
-			jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
-			rand_dots = self.perm_R2_test_components_[:n_jitters, c]
-			plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
-			plt.xlim(-.5, .5)
-			plt.title("Component %d" % (c+1))
-			plt.scatter(0, self.R2_test_components_[c], marker = 'o', alpha = 1.0, c = 'k')
-			if add_Q2_from_train:
-				plt.errorbar(0.1, self.Q2_train_components_[c], self.Q2_train_components_std_[c], linestyle='None', marker='.', c = 'r', alpha = 0.5)
-			plt.xticks(color='w')
-			plt.ylim(y1, y2)
-			if self.pvalue_R2_test_components_[c] == 0:
-				plt.xlabel("R2=%1.3f, P<%1.1e" % (self.R2_test_components_[c], (1 / self.n_permutations)), fontsize=10)
-			else:
-				plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_test_components_[c], self.pvalue_R2_test_components_[c]), fontsize=10)
-			p_num += 1
-		if png_basename is not None:
-			plt.savefig("%s_model_fit_to_test_with_null.png" % png_basename)
-			plt.close()
-		else:
-			plt.show()
-	def plot_rmsep_components(self, component_range = np.arange(1,11,1), png_basename = None):
-		full_model_rmse = []
-		full_model_ve = []
-		for i in component_range:
-			pls2 = PLSRegression(n_components=i)
-			pls2.fit(self.X_Train_, self.Y_Train_)
-			Y_proj = pls2.predict(self.X_Train_)
-			score = explained_variance_score(self.Y_Train_, Y_proj)
-			full_model_ve.append(score)
-			full_model_rmse.append(mean_squared_error(self.Y_Train_, Y_proj, squared = False))
-		rmse_cv = []
-		ve_cv = []
-		for i in component_range:
-			rmse_cv_by_subject = []
-			CV_temp_rmse = []
-			CV_temp_ve = []
-			for group in self.ugroup_train_:
-				Y_gtrain = self.Y_Train_[self.group_train_ != group]
-				Y_gtest = self.Y_Train_[self.group_train_ == group]
-				X_gtrain = self.X_Train_[self.group_train_ != group]
-				X_gtest = self.X_Train_[self.group_train_ == group]
-				pls2 = PLSRegression(n_components=i)
-				pls2.fit(X_gtrain, Y_gtrain)
-				Y_proj = pls2.predict(X_gtest)
-				CV_temp_ve.append(explained_variance_score(Y_gtest, Y_proj))
-				CV_temp_rmse.append(mean_squared_error(Y_gtest, Y_proj, squared = False))
-			rmse_cv.append(np.mean(CV_temp_rmse))
-			ve_cv.append(np.mean(CV_temp_ve))
-		plt.plot(component_range, np.array(full_model_rmse), c = 'b', label = "Model RMSEP")
-		plt.plot(component_range, np.array(rmse_cv), c = 'r', label = "CV RMSEP")
-		plt.legend()
-		if png_basename is not None:
-			plt.savefig("%s_rmse_versus_component_number.png" % png_basename)
-			plt.close()
-		else:
-			plt.show()
-		plt.plot(component_range, np.array(full_model_ve), c = 'k', label = "Model R2")
-		plt.plot(component_range, np.array(ve_cv), c = 'r', label = "CV Q2")
-		plt.legend()
-		if png_basename is not None:
-			plt.savefig("%s_R2_versus_component_number.png" % png_basename)
-			plt.close()
-		else:
-			plt.show()
-
-class bootstraper_parallel():
-	def __init__(self, n_jobs, n_boot = 1000, split = 0.5):
-		self.n_jobs = n_jobs
-		self.n_boot = n_boot
-		self.split = split
-	def nfoldsplit_group(self, group, n_fold = 5, holdout = 0, train_index = None, verbose = False, debug_verbose = False):
-		"""
-		Creates indexed array(s) for k-fold cross validation with holdout option for test data. The ratio of the groups are maintained. To reshuffle the training, if can be passed back through via index_train.
-		The indices are always based on the original grouping variable. i.e., the orignal data.
-		
-		Parameters
-		----------
-		group : array
-			List array with length of number of subjects. 
-		n_fold : int
-			The number of folds
-		holdout : float
-			The amount of data to holdout ranging from 0 to <1. A reasonable holdout is around 0.3 or 30 percent. If holdout = None, then returns test_index = None. (default = 0)
-		train_index : array
-			Indexed array of training data. Holdout must be zero (holdout = 0). It is useful for re-shuffling the fold indices or changing the number of folds.
-		verbose : bool
-			Prints out the splits and some basic information
-		debug_verbose: bool
-			Prints out the indices by group
-		Returns
-		---------
-		train_index : array
-			index array of training data
-		fold_indices : object
-			the index array for each fold (n_folds, training_fold_size)
-		test_index : array or None
-			index array of test data
-		"""
-		test_index = None
-		original_group = group[:]
-		ugroup = np.unique(group)
-		lengroup = len(group)
-		indices = np.arange(0,lengroup,1)
-		if holdout != 0:
-			assert holdout < 1., "Error: Holdout ratio must be >0 and <1.0. Try .3"
-			assert train_index is None, "Error: train index already exists."
-			indx_0 = []
-			indx_1 = []
-			for g in ugroup:
-				pg = np.random.permutation(indices[group==g])
-				indx_0.append(pg[:int(len(pg)*holdout)])
-				indx_1.append(pg[int(len(pg)*holdout):])
-			train_index = np.concatenate(indx_1)
-			test_index = np.concatenate(indx_0)
-			group = group[train_index]
-			if verbose:
-				print("Train data size = %s, Test data size = %s [holdout = %1.2f]" %(len(train_index), len(test_index), holdout))
-		else:
-			if train_index is None:
-				train_index = indices[:]
-			else:
-				group = group[train_index]
-		# reshuffle for good luck
-		gsize = []
-		shuffle_train = []
-		for g in ugroup:
-			pg = np.random.permutation(train_index[group==g])
-			gsize.append(len(pg))
-			shuffle_train.append(pg)
-		train_index = np.concatenate(shuffle_train)
-		group = original_group[train_index]
-		split_sizes = np.divide(gsize, n_fold).astype(int)
-		if verbose:
-			for s in range(len(ugroup)):
-				print("Training group [%s]: size n=%d, split size = %d, remainder = %d" % (ugroup[s], gsize[s], split_sizes[s], int(gsize[s] % split_sizes[s])))
-			if test_index is not None:
-				for s in range(len(ugroup)):
-					original_group[test_index] == ugroup[s]
-					test_size = np.sum((original_group[test_index] == ugroup[s])*1)
-					print("Test group [%s]: size n=%d, holdout percentage = %1.2f" % (ugroup[s], test_size, np.divide(test_size * 100, test_size+gsize[s])))
-		fold_indices = []
-		for n in range(n_fold):
-			temp_index = []
-			for i, g in enumerate(ugroup):
-				temp = train_index[group==g]
-				if n == n_fold-1:
-					temp_index.append(temp[n*split_sizes[i]:])
-				else:
-					temp_index.append(temp[n*split_sizes[i]:((n+1)*split_sizes[i])])
-				if debug_verbose:
-					print(n)
-					print(g)
-					print(original_group[temp_index[-1]])
-					print(temp_index[-1])
-			fold_indices.append(np.concatenate(temp_index))
-		train_index = np.sort(train_index)
-		fold_indices = np.array(fold_indices, dtype = object)
-		if holdout != 0:
-			test_index = np.sort(test_index)
-		if verbose:
-			for i in range(n_fold):
-				print("\nFOLD %d:" % (i+1))
-				print(np.sort(original_group[fold_indices[i]]))
-			if test_index is not None:
-				print("\nTEST:" )
-				print(np.sort(original_group[test_index]))
-		return(fold_indices, train_index, test_index)
-	def bootstrap_by_group(self, group, split = 0.5):
-		ugroup = np.unique(group)
-		lengroup = len(group)
-		indices = np.arange(0,lengroup,1)
-		indx_0 = []
-		indx_1 = []
-		for g in ugroup:
-			pg = np.random.permutation(indices[group==g])
-			indx_0.append(pg[:int(len(pg)*split)])
-			indx_1.append(pg[int(len(pg)*split):])
-		return(np.concatenate(indx_0), np.concatenate(indx_1))
-	def create_nfold(self, X, y, group, n_fold = 10, holdout = 0.3, verbose = True):
-		"""
-		Imports the data and runs nfoldsplit_group.
-		"""
-		fold_indices, train_index, test_index  = self.nfoldsplit_group(group = group,
-																							n_fold = n_fold,
-																							holdout = holdout,
-																							train_index = None,
-																							verbose = verbose,
-																							debug_verbose = False)
-		X_train = X[train_index]
-		y_train = y[train_index]
-		if test_index is not None:
-			X_test= X[test_index]
-			y_test= y[test_index]
-		self.train_index_ = train_index
-		self.fold_indices_ = fold_indices
-		self.test_index_ = test_index
-		self.X_ = X
-		self.y_ = y
-		self.group_ = group
-		self.n_fold_ = n_fold
-		self.X_train_ = X_train
-		self.y_train_ = y_train
-		self.X_test_ = X_test
-		self.y_test_ = y_test
-	def nfold_params_search(self, c, X, y, group, train_index, fold_indices, eta_range = np.arange(.1,1.,.1), n_reshuffle = 1):
-		"""
-		"""
-		n_fold = len(fold_indices)
-		fold_index = np.arange(0,n_fold,1)
-		nspls_runs = n_fold*n_reshuffle
-		K = c + 1
-		cQ2_SEARCH = np.zeros((len(eta_range)))
-		cQ2_SEARCH_SD = np.zeros((len(eta_range)))
-		cRMSEP_CV_SEARCH = np.zeros((len(eta_range)))
-		cRMSEP_CV_SEARCH_SD = np.zeros((len(eta_range)))
-		for e, eta in enumerate(eta_range):
-			temp_Q2 = np.zeros((nspls_runs))
-			temp_rmse = np.zeros((nspls_runs))
-			if ((K+1) < X[train_index].shape[1]) and (y[train_index].shape[1] > (K+1)):
-				p = 0
-				for i in range(n_reshuffle):
-					if n_reshuffle > 1:
-						fold_indices, _, _ = self.nfoldsplit_group(group = group,
-																			n_fold = n_fold,
-																			holdout = 0,
-																			train_index = train_index,
-																			verbose = False,
-																			debug_verbose = False)
-					for n in range(n_fold):
-						sel_train = fold_indices[n]
-						sel_test = np.concatenate(fold_indices[fold_index != n])
-						tmpX_train = X[sel_train]
-						tmpY_train = y[sel_train]
-						tmpX_test = X[sel_test]
-						tmpY_test = y[sel_test]
-						# kick out effective zero predictors
-						tmpX_test = tmpX_test[:,tmpX_train.std(0) > 0.0001]
-						tmpX_train = tmpX_train[:,tmpX_train.std(0) > 0.0001]
-						spls2 = spls_rwrapper(n_components = K, eta = eta)
-						spls2.fit(tmpX_train, tmpY_train)
-						Y_proj = spls2.predict(tmpX_test)
-						temp_Q2[p] = explained_variance_score(tmpY_test, Y_proj)
-						temp_rmse[p] = mean_squared_error(tmpY_test, Y_proj, squared = False)
-						p += 1
-				cQ2_SEARCH[e] = np.mean(temp_Q2)
-				cQ2_SEARCH_SD[e] = np.std(temp_Q2)
-				cRMSEP_CV_SEARCH[e] = np.mean(temp_rmse)
-				cRMSEP_CV_SEARCH_SD[e] = np.std(temp_rmse)
-			else:
-				cQ2_SEARCH[e] = 0
-				cQ2_SEARCH_SD[e] = 0
-				cRMSEP_CV_SEARCH[e] = 1
-				cRMSEP_CV_SEARCH_SD[e] = 1
-		print("Component %d finished" % K)
-		return(c, cQ2_SEARCH, cQ2_SEARCH_SD, cRMSEP_CV_SEARCH, cRMSEP_CV_SEARCH_SD)
-	def nfold_cv_params_search_spls(self, eta_range = np.arange(.1,1.,.1), n_reshuffle = 1, max_n_comp = 10):
-		assert hasattr(self,'fold_indices_'), "Error: No fold indices. Run create_nfold first"
-		assert isinstance(n_reshuffle, (int, np.integer)), "Error: n_reshuffle must be an interger"
-		# parallel by max_n_comp
-		output = Parallel(n_jobs=min(self.n_jobs,max_n_comp), backend='multiprocessing')(delayed(self.nfold_params_search)(c, X = self.X_, y = self.y_, group = self.group_, train_index = self.train_index_, fold_indices = self.fold_indices_, eta_range = eta_range, n_reshuffle = n_reshuffle) for c in range(max_n_comp))
-		ord_k, Q2_SEARCH, Q2_SEARCH_SD, RMSEP_CV_SEARCH, RMSEP_CV_SEARCH_SD = zip(*output)
-		ord_k = np.array(ord_k)
-		Q2_SEARCH = np.row_stack(Q2_SEARCH)[ord_k]
-		Q2_SEARCH_SD = np.row_stack(Q2_SEARCH_SD)[ord_k]
-		RMSEP_CV_SEARCH = np.row_stack(RMSEP_CV_SEARCH)[ord_k]
-		RMSEP_CV_SEARCH_SD = np.row_stack(RMSEP_CV_SEARCH_SD)[ord_k]
-		# re-ordering stuff Comp [low to high], Eta [low to high]
-		self.Q2_SEARCH_ = Q2_SEARCH.T
-		self.Q2_SEARCH_SD_ = Q2_SEARCH_SD.T
-		self.RMSEP_CV_SEARCH_ = RMSEP_CV_SEARCH.T
-		self.RMSEP_CV_SEARCH_SD_ = RMSEP_CV_SEARCH_SD.T
-		self.search_eta_range_ = eta_range[::-1]
-		self.max_n_comp_ = max_n_comp
-		xy = (self.RMSEP_CV_SEARCH_ == np.nanmin(self.RMSEP_CV_SEARCH_))*1
-		print_optimal_values = True
-		try:
-			self.best_K_ = int(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
-		except:
-			print_optimal_values = False
-			print("Warning: multiple components have the best value.")
-			print(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
-			self.best_K_ = np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0]
-		try:
-			self.best_eta_ = float(self.search_eta_range_[xy.mean(1) > 0])
-		except:
-			print_optimal_values = False
-			print("Warning: multiple sparsity thresholds have the best value.")
-			print(self.search_eta_range_[xy.mean(1) > 0])
-			self.best_eta_ = self.search_eta_range_[xy.mean(1) > 0]
-		if print_optimal_values:
-			print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
-	def group_params_searcher(self, c, X, y, group, eta_range = np.arange(.1,1.,.1)):
-		K = c + 1
-		ugroup = np.unique(group)
-		cQ2_SEARCH = np.zeros((len(eta_range)))
-		cQ2_SEARCH_SD = np.zeros((len(eta_range)))
-		cRMSEP_CV_SEARCH = np.zeros((len(eta_range)))
-		cRMSEP_CV_SEARCH_SD = np.zeros((len(eta_range)))
-		for e, eta in enumerate(eta_range):
-			temp_Q2 = []
-			temp_rmse = []
-			if ((K+1) < X.shape[1]) and (y.shape[1] > (K+1)):
-				for g in ugroup:
-					Y_train = y[group != g]
-					X_train = X[group != g]
-					X_test = X[group == g]
-					Y_test = y[group == g]
-					# kick out effective zero predictors
-					X_test = X_test[:,X_train.std(0) > 0.0001]
-					X_train = X_train[:,X_train.std(0) > 0.0001]
-					spls2 = spls_rwrapper(n_components = K, eta = eta)
-					spls2.fit(X_train, Y_train)
-					Y_proj = spls2.predict(X_test)
-					temp_Q2.append(explained_variance_score(Y_test, Y_proj))
-					temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
-				cQ2_SEARCH[e] = np.mean(temp_Q2)
-				cQ2_SEARCH_SD[e] = np.std(temp_Q2)
-				cRMSEP_CV_SEARCH[e] = np.mean(temp_rmse)
-				cRMSEP_CV_SEARCH_SD[e] = np.std(temp_rmse)
-			else:
-				cQ2_SEARCH[e] = 0
-				cQ2_SEARCH_SD[e] = 0
-				cRMSEP_CV_SEARCH[e] = 1
-				cRMSEP_CV_SEARCH_SD[e] = 1
-		print("Component %d finished" % K)
-		return(c, cQ2_SEARCH, cQ2_SEARCH_SD, cRMSEP_CV_SEARCH, cRMSEP_CV_SEARCH_SD)
-	def group_cv_params_search_spls(self, X, y, group, eta_range = np.arange(.1,1.,.1), max_n_comp = 10):
-		# parallel by max_n_comp
-		output = Parallel(n_jobs=min(self.n_jobs,max_n_comp))(delayed(self.group_params_searcher)(c, X = X, y = y, group = group, eta_range = eta_range) for c in range(max_n_comp))
-		ord_k, Q2_SEARCH, Q2_SEARCH_SD, RMSEP_CV_SEARCH, RMSEP_CV_SEARCH_SD = zip(*output)
-		ord_k = np.array(ord_k)
-		Q2_SEARCH = np.row_stack(Q2_SEARCH)[ord_k]
-		Q2_SEARCH_SD = np.row_stack(Q2_SEARCH_SD)[ord_k]
-		RMSEP_CV_SEARCH = np.row_stack(RMSEP_CV_SEARCH)[ord_k]
-		RMSEP_CV_SEARCH_SD = np.row_stack(RMSEP_CV_SEARCH_SD)[ord_k]
-		# re-ordering stuff Comp [low to high], Eta [low to high]
-		self.Q2_SEARCH_ = Q2_SEARCH.T
-		self.Q2_SEARCH_SD_ = Q2_SEARCH_SD.T
-		self.RMSEP_CV_SEARCH_ = RMSEP_CV_SEARCH.T
-		self.RMSEP_CV_SEARCH_SD_ = RMSEP_CV_SEARCH_SD.T
-		self.search_eta_range_ = eta_range[::-1]
-		self.max_n_comp_ = max_n_comp
-		xy = (self.RMSEP_CV_SEARCH_ == np.nanmin(self.RMSEP_CV_SEARCH_))*1
-		print_optimal_values = True
-		try:
-			self.best_K_ = int(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
-		except:
-			print_optimal_values = False
-			print("Warning: multiple components have the best value.")
-			print(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
-			self.best_K_ = np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0]
-		try:
-			self.best_eta_ = float(self.search_eta_range_[xy.mean(1) > 0])
-		except:
-			print_optimal_values = False
-			print("Warning: multiple sparsity thresholds have the best value.")
-			print(self.search_eta_range_[xy.mean(1) > 0])
-			self.best_eta_ = self.search_eta_range_[xy.mean(1) > 0]
-		if print_optimal_values:
-			print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
-
-	def plot_cv_params_search_spls(self, nan_unstable = False, png_basename = None):
-		assert hasattr(self,'best_eta_'), "Error: run cv_params_search_spls"
-		
-		#Q2
-		Q2_SEARCH = self.Q2_SEARCH_
-		if nan_unstable:
-			Q2_SEARCH[Q2_SEARCH < 0] = np.nan
-		else:
-			Q2_SEARCH[Q2_SEARCH < 0] = 0
-		plt.imshow(Q2_SEARCH, interpolation = None, cmap='jet')
-		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
-		plt.ylabel('eta (sparsity)')
-		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
-		plt.xlabel('Components')
-		plt.colorbar()
-		plt.title("Q-Squared [CV]")
-		if png_basename is not None:
-			plt.savefig("%s_feature_selection_Q2.png" % png_basename)
-			plt.close()
-		else:
-			plt.show()
-
-		Q2_SEARCH = self.Q2_SEARCH_
-		Q2_SEARCH_SD = self.Q2_SEARCH_SD_
-		if nan_unstable:
-			Q2_SEARCH_SD[Q2_SEARCH < 0] = np.nan
-		plt.imshow(Q2_SEARCH_SD, interpolation = None, cmap='jet_r')
-		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
-		plt.ylabel('eta (sparsity)')
-		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
-		plt.xlabel('Components')
-		plt.colorbar()
-		plt.title("Q-Squared [CV] St. Dev.")
-		if png_basename is not None:
-			plt.savefig("%s_feature_selection_Q2_SD.png" % png_basename)
-			plt.close()
-		else:
-			plt.show()
-
-		Q2_SEARCH_RATIO = np.divide(self.Q2_SEARCH_, self.Q2_SEARCH_SD_)
-		if nan_unstable:
-			Q2_SEARCH_RATIO[Q2_SEARCH < 0] = np.nan
-		else:
-			Q2_SEARCH_RATIO[Q2_SEARCH < 0] = 0
-		plt.imshow(Q2_SEARCH_RATIO, interpolation = None, cmap='jet')
-		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
-		plt.ylabel('eta (sparsity)')
-		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
-		plt.xlabel('Components')
-		plt.colorbar()
-		plt.title("Q-Squared [CV] / St. Dev.")
-		if png_basename is not None:
-			plt.savefig("%s_feature_selection_Q2divSD.png" % png_basename)
-			plt.close()
-		else:
-			plt.show()
-
-		RMSEP_CV_SEARCH = self.RMSEP_CV_SEARCH_
-		if nan_unstable:
-			RMSEP_CV_SEARCH[RMSEP_CV_SEARCH > 1] = np.nan
-		else:
-			RMSEP_CV_SEARCH[RMSEP_CV_SEARCH > 1] = 1.
-		plt.imshow(self.RMSEP_CV_SEARCH_, interpolation = None, cmap='jet_r')
-		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
-		plt.ylabel('eta (sparsity)')
-		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
-		plt.xlabel('Components')
-		plt.colorbar()
-		plt.title("RMSEP [CV]")
-		if png_basename is not None:
-			plt.savefig("%s_feature_selection_RMSEP.png" % png_basename)
-			plt.close()
-		else:
-			plt.show()
-
-	def bootstrap_spls(self, i, X, y, n_comp, group, split, eta):
-		if i % 100 == 0: 
-			print("Bootstrap : %d" % (i))
-		train_idx, _ = self.bootstrap_by_group(group = group, split = split)
-		X = X[train_idx]
-		y = y[train_idx]
-		boot_spls2 = spls_rwrapper(n_components = n_comp, eta = eta)
-		boot_spls2.fit(X, y)
-		selector = np.zeros((X.shape[1]))
-		selector[boot_spls2.selectedvariablesindex_] = 1
-		return(selector)
-	def run_bootstrap_spls(self, X, y, n_comp, group, eta, split = 0.5):
-		selected_vars = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.bootstrap_spls)(i, X = X, y = y, n_comp = n_comp, group = group, split = self.split, eta = eta) for i in range(self.n_boot))
-		self.selected_vars_ = np.array(selected_vars)
-		self.selected_vars_mean_ = np.mean(selected_vars, 0)
-		self.X = X  # I need to fix this
-		self.y = y
-		self.n_comp = n_comp
-		self.eta = eta
-		self.split = split
-		self.group = group
-		self.ugroup = np.unique(group)
-	def nfold_cv_search_array(self, search_array = np.arange(.2,1.,.05)):
-		assert hasattr(self,'selected_vars_mean_'), "Error: bootstrap parallel is missing"
-		ve_cv = []
-		rmse_cv = []
-		ve_cv_std = []
-		rmse_cv_std = []
-		full_model_ve = []
-		full_model_rmse = []
-		n_fold = len(self.fold_indices_)
-		fold_index = np.arange(0,n_fold,1)
-		for s in search_array:
-			print("\nSelection Threshold = %1.2f" % np.round(s,3))
-			selection_mask = self.selected_vars_mean_ > s
-			CV_temp_rmse = []
-			CV_temp_ve = []
-			X_SEL = self.X_[:,selection_mask]
-			print("\nNumber of Selected Variables: %d from %s " % (X_SEL.shape[1], self.X_.shape[1]))
-			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
-				components_variance_explained_test = np.zeros((self.n_fold_, self.n_comp))
-				for n in range(self.n_fold_):
-					sel_train = self.fold_indices_[n]
-					sel_test = np.concatenate(self.fold_indices_[fold_index != n])
-					X_train =X_SEL[sel_train]
-					Y_train = self.y_[sel_train]
-					X_test = X_SEL[sel_test]
-					Y_test = self.y_[sel_test]
-					pls2 = PLSRegression(n_components=self.n_comp).fit(X_train, Y_train)
-					Y_proj = pls2.predict(X_test)
-					score = explained_variance_score(Y_test, Y_proj)
-					print("FOLD %d : %1.3f" % ((n+1), score))
-					CV_temp_ve.append(score)
-					CV_temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
-					x_scores_test, y_scores_test = pls2.transform(X_test, Y_test)
-					for c in range(self.n_comp):
-						yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_test.std(axis=0, ddof=1) + Y_test.mean(axis=0)
-						components_variance_explained_test[n, c] = explained_variance_score(Y_test, yhat_c)
-				print("CV MODEL : %1.3f +/- %1.3f" % (np.mean(CV_temp_ve), np.std(CV_temp_ve)))
-				for c in range(self.n_comp):
-					print("  CV COMP%d : %1.3f +/- %1.3f" % ((c+1), np.mean(components_variance_explained_test, 0)[c], np.std(components_variance_explained_test, 0)[c]))
-				rmse_cv.append(np.mean(CV_temp_rmse))
-				ve_cv.append(np.mean(CV_temp_ve))
-				rmse_cv_std.append(np.std(CV_temp_rmse))
-				ve_cv_std.append(np.std(CV_temp_ve))
-				# full model
-				X_SEL = self.X_train_[:,selection_mask]
-				Y_actual = self.y_train_
-				pls2 = PLSRegression(n_components=self.n_comp).fit(X_SEL, Y_actual)
-				Y_proj = pls2.predict(X_SEL)
-				score = explained_variance_score(Y_actual, Y_proj)
-				print("TRAIN FULL MODEL : %1.3f" % (score))
-				x_scores_test, y_scores_test = pls2.transform(X_SEL, Y_actual)
-				for c in range(self.n_comp):
-					yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_actual.std(axis=0, ddof=1) + Y_actual.mean(axis=0)
-					print("  TRAIN COMP%d : %1.3f" % ((c+1),explained_variance_score(Y_actual, yhat_c)))
-				full_model_ve.append(score)
-				full_model_rmse.append(mean_squared_error(Y_actual, Y_proj, squared = False))
-			else:
-				rmse_cv.append(0.)
-				ve_cv.append(0.)
-				rmse_cv_std.append(0.)
-				ve_cv_std.append(0.)
-				full_model_ve.append(0.)
-				full_model_rmse.append(0.)
-		self.RMSEP_CV_ = np.array(rmse_cv)
-		self.Q2_ = np.array(ve_cv)
-		self.RMSEP_CV_SD_ = np.array(rmse_cv_std)
-		self.Q2_SD_ = np.array(ve_cv_std)
-		self.RMSEP_LEARN_ = np.array(full_model_rmse)
-		self.R2_LEARN_ = np.array(full_model_ve)
-		self.search_thresholds_ = search_array
-	def cv_search_array(self, search_array = np.arange(.2,1.,.05)):
-		assert hasattr(self,'selected_vars_mean_'), "Error: bootstrap parallel is missing"
-		ve_cv = []
-		rmse_cv = []
-		ve_cv_std = []
-		rmse_cv_std = []
-		full_model_ve = []
-		full_model_rmse = []
-		for s in search_array:
-			print(np.round(s,3))
-			selection_mask = self.selected_vars_mean_ > s
-			CV_temp_rmse = []
-			CV_temp_ve = []
-			X_SEL = self.X[:,selection_mask]
-			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
-				for g in self.ugroup:
-					Y_train = self.y[self.group != g]
-					X_train = X_SEL[self.group != g]
-					X_test = X_SEL[self.group == g]
-					Y_test = self.y[self.group == g]
-					pls2 = PLSRegression(n_components=self.n_comp).fit(X_train, Y_train)
-					Y_proj = pls2.predict(X_test)
-					score = explained_variance_score(Y_test, Y_proj)
-					print("%s : %1.3f" % (g, score))
-					CV_temp_ve.append(score)
-					CV_temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
-				print("CV MODEL : %1.3f +/- %1.3f" % (np.mean(CV_temp_ve), np.std(CV_temp_ve)))
-				rmse_cv.append(np.mean(CV_temp_rmse))
-				ve_cv.append(np.mean(CV_temp_ve))
-				rmse_cv_std.append(np.std(CV_temp_rmse))
-				ve_cv_std.append(np.std(CV_temp_ve))
-				# full model
-				pls2 = PLSRegression(n_components=self.n_comp).fit(X_SEL, self.y)
-				Y_proj = pls2.predict(X_SEL)
-				score = explained_variance_score(self.y, Y_proj)
-				print("MODEL : %1.3f" % (score))
-				full_model_ve.append(score)
-				full_model_rmse.append(mean_squared_error(self.y, Y_proj, squared = False))
-			else:
-				rmse_cv.append(0.)
-				ve_cv.append(0.)
-				rmse_cv_std.append(0.)
-				ve_cv_std.append(0.)
-				full_model_ve.append(0.)
-				full_model_rmse.append(0.)
-		self.RMSEP_CV_ = np.array(rmse_cv)
-		self.Q2_ = np.array(ve_cv)
-		self.RMSEP_CV_SD_ = np.array(rmse_cv_std)
-		self.Q2_SD_ = np.array(ve_cv_std)
-		self.RMSEP_LEARN_ = np.array(full_model_rmse)
-		self.R2_LEARN_ = np.array(full_model_ve)
-		self.search_thresholds_ = search_array
-	def plot_cv_search_array(self, png_basename = None):
-		assert hasattr(self,'search_thresholds_'), "Error: run cv_search_array"
-		isvalid_sd = np.zeros((len(self.search_thresholds_)), dtype = bool)
-		for i, s in enumerate(self.search_thresholds_):
-			selection_mask = self.selected_vars_mean_ > s
-			CV_temp_rmse = []
-			CV_temp_ve = []
-			X_SEL = self.X[:,selection_mask]
-			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
-				isvalid_sd[i] = True
-		isvalid_sd[self.Q2_SD_ > 1] = False
-		Xthresholds = self.search_thresholds_
-		Q2_values = self.Q2_
-		Q2_values[Q2_values < 0] = 0 
-		plt.plot(Xthresholds, Q2_values, color='blue')
-		plt.fill_between(Xthresholds[isvalid_sd], self.Q2_[isvalid_sd]-self.Q2_SD_[isvalid_sd], self.Q2_[isvalid_sd]+self.Q2_SD_[isvalid_sd], alpha=0.5, edgecolor='blue', facecolor='lightsteelblue', linestyle=":")
-		plt.ylabel('Q-Squared')
-		plt.xlabel('Selection Threshold')
-		plt.xticks(Xthresholds, [s[:4] for s in np.round(Xthresholds,3).astype(str)])
-		plt.title("sPLS Model: Components = %d, eta = %1.2f, n_boot = %d" % (self.n_comp, self.eta, self.n_boot))
-		if png_basename is not None:
-			plt.savefig("%s_feature_selection_thresholds.png" % png_basename)
-			plt.close()
-		else:
-			plt.show()
+def generate_seeds(n_seeds, maxint = int(2**32 - 1)):
+	return([np.random.randint(0, maxint) for i in range(n_seeds)])
 
 
 class parallel_scca():
@@ -933,7 +96,7 @@ class parallel_scca():
 			else:
 				out.append(variable[unique == arr])
 		return np.concatenate(out)
-	def nfoldsplit_group(self, group, n_fold = 10, holdout = 0, train_index = None, verbose = False, debug_verbose = False):
+	def nfoldsplit_group(self, group, n_fold = 10, holdout = 0, train_index = None, verbose = False, debug_verbose = False, seed = None):
 		"""
 		Creates indexed array(s) for k-fold cross validation with holdout option for test data. The ratio of the groups are maintained. To reshuffle the training, if can be passed back through via index_train.
 		The indices are always based on the original grouping variable. i.e., the orignal data.
@@ -961,6 +124,12 @@ class parallel_scca():
 		test_index : array or None
 			index array of test data
 		"""
+		
+		if seed is None:
+			np.random.seed(np.random.randint(4294967295))
+		else:
+			np.random.seed(seed)
+		
 		test_index = None
 		original_group = group[:]
 		ugroup = np.unique(group)
@@ -1056,10 +225,16 @@ class parallel_scca():
 		self.y_train_ = y_train
 		self.X_test_ = X_test
 		self.y_test_ = y_test
-	def _scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, n_reshuffle = 1, max_iter = 20, debug = False, verbose = True, optimize_x = False, optimize_y = False, optimize_primary_component = False, optimize_global_redundancy_index = False, optimize_selected_variables = True):
+	def _scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, n_reshuffle = 1, max_iter = 20, debug = False, verbose = True, optimize_x = False, optimize_y = False, optimize_primary_component = False, optimize_global_redundancy_index = False, optimize_selected_variables = True, seed = None):
 		"""
 		return CV 
 		"""
+		if _reshuffle > 1:
+			if seed is None:
+				np.random.seed(np.random.randint(4294967295))
+			else:
+				np.random.seed(seed)
+		
 		p = 0
 		n_fold = len(fold_indices)
 		fold_index = np.arange(0,self.n_fold_,1)
@@ -1141,6 +316,11 @@ class parallel_scca():
 		Q2_GRIDSEARCH = np.zeros((search_i_size, search_j_size, search_k_size))
 		Q2_GRIDSEARCH_SD = np.zeros((search_i_size, search_j_size, search_k_size))
 		# because of indexing, everything is passed to the gridsearch. The function (above) only optimizes training data! np.sort(np.concatenate(self.fold_indices_)) == self.train_index_
+		
+		# generate independent seeds for the grid search. This is doesn't do anything unless n_reshuffle > 1.
+		n_seeds  = len(list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
+		seed_grid = np.array(generate_seeds(n_seeds)).reshape(search_i_size, search_j_size, search_k_size)
+		
 		output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self._scca_params_cvgridsearch)(X = self.X_, 
 																																	y = self.y_,
 																																	n_components = component_range[i],
@@ -1156,7 +336,8 @@ class parallel_scca():
 																																	optimize_primary_component = optimize_primary_component,
 																																	optimize_global_redundancy_index = optimize_global_redundancy_index,
 																																	optimize_selected_variables = optimize_selected_variables,
-																																	max_iter = max_iter) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
+																																	max_iter = max_iter
+																																	seed = seed_grid[i,j,k]) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
 		output_mean, output_sd = zip(*output)
 		count = 0
 		best_component = 0
@@ -1359,10 +540,17 @@ class parallel_scca():
 		self.toself_ = toself
 		self.calc_squared_correlation_ = calc_squared_correlation
 
-	def _permute_function_scca(self, p, compute_targets = True, mask_sparsity = True, calc_squared_correlation = True, permute_loadings = False):
+	def _permute_function_scca(self, p, compute_targets = True, mask_sparsity = True, calc_squared_correlation = True, permute_loadings = False, seed = None):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		
+		if seed is None:
+			np.random.seed(np.random.randint(4294967295))
+		else:
+			np.random.seed(seed)
+		
 		if p % 200 == 0:
 			print(p)
+		
 		X_perm = self.index_perm(unique_arr = self.ugroup_train_,
 										arr = self.group_train_,
 										variable = self.X_train_)
@@ -1394,7 +582,8 @@ class parallel_scca():
 		return(X_VE, Y_VE, X_RDI, Y_RDI, CANCORS, X_VE_ROI, Y_VE_ROI, perm_X_loadings, perm_Y_loadings)
 	def run_permute_scca(self, compute_targets = True, calulate_pvalues = True, permute_loadings = False):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
-		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_scca)(p, compute_targets = compute_targets, permute_loadings = permute_loadings, calc_squared_correlation = self.calc_squared_correlation_) for p in range(self.n_permutations))
+		seeds = generate_seeds(self.n_permutations)
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_scca)(p, compute_targets = compute_targets, permute_loadings = permute_loadings, calc_squared_correlation = self.calc_squared_correlation_, seed = seeds[p]) for p in range(self.n_permutations))
 		perm_X_VE, perm_Y_VE, perm_X_RDI, perm_Y_RDI, perm_CANCORS, perm_X_VE_ROI, perm_Y_VE_ROI, perm_X_loadings, perm_Y_loadings = zip(*output)
 		self.perm_R2_X_test_ = np.array(perm_X_VE)
 		self.perm_R2_Y_test_ = np.array(perm_Y_VE)
@@ -2428,6 +1617,849 @@ class tm_glm:
 		self.AMPLITUDE = np.array(AMPLITUDE)
 		self.ACROPHASE = np.array(ACROPHASE)
 		self.ACROPHASE_24 = np.array(ACROPHASE_24)
+
+# older PLS code.
+
+class permute_model_parallel():
+	"""
+	Calculates PLS metrics and significance using sklearn PLSRegression and joblib locky parallelization.
+	"""
+	def __init__(self, n_jobs, n_permutations = 10000):
+		self.n_jobs = n_jobs
+		self.n_permutations = n_permutations
+	def index_perm(self, unique_arr, arr, variable, within_group = True):
+		"""
+		Shuffles an array within group (within_group = True) or the groups (within_group = False)
+		"""
+		if within_group:
+			perm_u = unique_arr
+		else:
+			perm_u = np.random.permutation(unique_arr)
+		out = []
+		for unique in perm_u:
+			if within_group:
+				out.append(np.random.permutation(variable[unique == arr]))
+			else:
+				out.append(variable[unique == arr])
+		return np.concatenate(out)
+	def check_variables(self, X_Train, Y_Train, X_Test, Y_Test):
+		X_Train, Y_Train, X_Train_mean, Y_Train_mean, X_Train_std, Y_Train_std = zscaler_XY(X = X_Train, y = Y_Train)
+		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = zscaler_XY(X = X_Test, y = Y_Test)
+		has_issue = False
+		if np.sum((X_Train_std == 0)*1) != 0:
+			print("Warning: zero standard deviation predictors detected in Training data. Printing index array")
+			print((X_Train_std != 0)*1)
+			has_issue = True
+		if np.sum((X_Test_std == 0)*1) != 0:
+			print("Warning: zero standard deviation predictors detect in Testing data. Printing index array")
+			print((X_Test_std != 0)*1)
+			has_issue = True
+		outindex = (X_Test_std != 0) * (X_Train_std != 0)
+		return(outindex)
+	def fit_model(self, X_Train, Y_Train, X_Test, Y_Test, n_components, group_train):
+		"""
+		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
+		"""
+		X_Train, Y_Train, X_Train_mean, Y_Train_mean, X_Train_std, Y_Train_std = zscaler_XY(X = X_Train, y = Y_Train)
+		X_Test, Y_Test, X_Test_mean, Y_Test_mean, X_Test_std, Y_Test_std = zscaler_XY(X = X_Test, y = Y_Test)
+		ugroup_train = np.unique(group_train)
+
+		# Calculate Q2 squared
+		CV_Q2 = np.zeros((len(ugroup_train)))
+		CV_Q2_roi = np.zeros((len(ugroup_train), Y_Train.shape[1]))
+		CV_Q2_components = np.zeros((len(ugroup_train), n_components))
+		CV_Q2_components_roi = np.zeros((len(ugroup_train), n_components, Y_Train.shape[1]))
+		for g, group in enumerate(ugroup_train):
+			X_gtrain = X_Train[group_train != group]
+			Y_gtrain = Y_Train[group_train != group]
+			X_gtest = X_Train[group_train == group]
+			Y_gtest = Y_Train[group_train == group]
+			pls2 = PLSRegression(n_components = n_components).fit(X_gtrain, Y_gtrain)
+			CV_Q2[g] = explained_variance_score(Y_gtest, pls2.predict(X_gtest))
+			CV_Q2_roi[g] = explained_variance_score(Y_gtest, pls2.predict(X_gtest), multioutput = 'raw_values')
+			for c in range(n_components):
+				yhat_c = np.dot(pls2.x_scores_[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_gtrain.std(axis=0, ddof=1) + Y_gtrain.mean(axis=0)
+				CV_Q2_components[g,c] = explained_variance_score(Y_gtrain, yhat_c)
+				CV_Q2_components_roi[g,c,:] = explained_variance_score(Y_gtrain, yhat_c, multioutput = 'raw_values')
+		self.Q2_train_ = CV_Q2.mean(0)
+		self.Q2_train_std_ = CV_Q2.std(0)
+		self.Q2_train_targets_ = CV_Q2_roi.mean(0)
+		self.Q2_train_components_ = CV_Q2_components.mean(0)
+		self.Q2_train_components_std_ = CV_Q2_components.std(0)
+		self.Q2_train_components_targets_ = CV_Q2_components_roi.mean(0)
+
+		# Calculate R2 squared for training data
+		pls2 = PLSRegression(n_components = n_components).fit(X_Train, Y_Train)
+		components_variance_explained_train = []
+		components_variance_explained_train_roi = []
+		for c in range(n_components):
+			yhat_c = np.dot(pls2.x_scores_[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_Train_std + Y_Train_mean
+			components_variance_explained_train.append(explained_variance_score(Y_Train, yhat_c))
+			components_variance_explained_train_roi.append(explained_variance_score(Y_Train, yhat_c, multioutput = 'raw_values'))
+		self.R2_train_ = explained_variance_score(Y_Train, pls2.predict(X_Train))
+		self.R2_train_targets_ = explained_variance_score(Y_Train, pls2.predict(X_Train), multioutput = 'raw_values')
+		self.R2_train_components_ = np.array(components_variance_explained_train)
+		self.R2_train_components_targets_ = np.array(components_variance_explained_train_roi)
+
+		# Calculate R2P squared for test data
+		components_variance_explained_test = []
+		components_variance_explained_test_roi = []
+		x_scores_test, y_scores_test = pls2.transform(X_Test, Y_Test)
+		for c in range(n_components):
+			yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_Test.std(axis=0, ddof=1) + Y_Test.mean(axis=0)
+			components_variance_explained_test.append(explained_variance_score(Y_Test, yhat_c))
+			components_variance_explained_test_roi.append(explained_variance_score(Y_Test, yhat_c, multioutput = 'raw_values'))
+		self.R2_test_ = explained_variance_score(Y_Test, pls2.predict(X_Test))
+		self.R2_test_targets_ = explained_variance_score(Y_Test, pls2.predict(X_Test), multioutput = 'raw_values')
+		self.R2_test_components_ = np.array(components_variance_explained_test)
+		self.R2_test_components_targets_ = np.array(components_variance_explained_test_roi)
+		self.n_components_ = n_components
+		self.group_train_ = group_train
+		self.ugroup_train_ = ugroup_train
+		self.X_Train_ = X_Train
+		self.Y_Train_ = Y_Train
+		self.X_Train_mean_ = X_Train_mean
+		self.Y_Train_mean_ = Y_Train_mean
+		self.X_Train_std_ = X_Train_std
+		self.Y_Train_std_ = Y_Train_std
+		self.X_Test_ = X_Test
+		self.Y_Test_ = Y_Test
+		self.X_Test_mean_ = X_Test_mean
+		self.Y_Test_mean_ = Y_Test_mean
+		self.X_Test_std_ = X_Test_std
+		self.Y_Test_std_ = Y_Test_std
+		self.model_obj_ = pls2
+	def fwer_corrected_p(self, permuted_arr, target, right_tail_probability = True, apply_fwer_correction = True):
+		"""
+		Calculates the FWER corrected p-value
+		
+		Parameters
+		----------
+		permuted_arr : array
+			Array of permutations [N_permutations, N_factors]
+		target : array or float
+			statistic(s) to check against null array
+		right_tail_probability : bool
+			Use right tail distribution (default: True)
+		apply_fwer_correction : bool
+			If True, output the family-wise error rate across all factors, else output permuted p-value for each factors' distribution (default: True)
+		Returns
+		---------
+		pval_corrected : array
+			Family-wise error rate corrected p-values or permuted p-values
+		"""
+		if permuted_arr.ndim == 1:
+			permuted_arr = permuted_arr.reshape(-1,1)
+		if isinstance(target, float):
+			target = np.array([target])
+		assert target.ndim == 1, "Error: target array must be 1D array or float"
+		n_perm, n_factors = permuted_arr.shape
+		if apply_fwer_correction: 
+			permuted_arr = permuted_arr.max(1)
+			pval_corrected = np.divide(np.searchsorted(np.sort(permuted_arr), target), n_perm)
+		else:
+			if n_factors == 1:
+				pval_corrected = np.divide(np.searchsorted(np.sort(permuted_arr), target), n_perm)
+			else:
+				assert n_factors == target.shape[0], "Error: n_factors must equal length of target for elementwise comparison"
+				pval_corrected = np.zeros_like(target)
+				for i in range(n_factors):
+					pval_corrected[i] = np.divide(np.searchsorted(np.sort(permuted_arr[:,i]), target[i]), n_perm)
+		if right_tail_probability:
+			pval_corrected = 1 - pval_corrected
+		return(pval_corrected)
+	def permute_function_pls(self, p, compute_targets = False):
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		if p % 200 == 0:
+			print(p)
+		X_perm = self.index_perm(unique_arr = self.ugroup_train_,
+										arr = self.group_train_,
+										variable = self.X_Train_)
+		perm_pls2 = PLSRegression(n_components = self.n_components_).fit(X_perm, self.Y_Train_)
+		x_scores_test = perm_pls2.transform(self.X_Test_)
+		components_ve = np.zeros((self.n_components_))
+		if compute_targets:
+			components_ve_roi = np.zeros((self.n_components_, self.Y_Train_.shape[1]))
+		for c in range(self.n_components_):
+			yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), perm_pls2.y_loadings_[:,c].reshape(-1,1).T) * self.Y_Test_std_ + self.Y_Test_mean_
+			components_ve[c] = explained_variance_score(self.Y_Test_, yhat_c)
+			if compute_targets:
+				components_ve_roi[c, :] = explained_variance_score(self.Y_Test_, yhat_c, multioutput = 'raw_values')
+		ve = explained_variance_score(self.Y_Test_, perm_pls2.predict(self.X_Test_))
+		if compute_targets:
+			ve_roi = explained_variance_score(self.Y_Test_, perm_pls2.predict(self.X_Test_), multioutput = 'raw_values')
+		abs_max_coef = np.max(np.abs(perm_pls2.coef_),1)
+		if compute_targets:
+			return(ve, ve_roi, components_ve, components_ve_roi, abs_max_coef)
+		else:
+			return(ve, components_ve, abs_max_coef)
+	def run_permute_pls(self, compute_targets = True, calulate_pvalues = True):
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		output = Parallel(n_jobs = self.n_jobs)(delayed(self.permute_function_pls)(p, compute_targets = compute_targets) for p in range(self.n_permutations))
+		if compute_targets:
+			perm_ve, perm_ve_roi, perm_components_ve, perm_components_ve_roi, perm_abs_max_coef = zip(*output)
+			self.perm_R2_test_targets_ = np.array(perm_ve_roi)
+			self.perm_R2_test_components_targets_ = np.array(perm_components_ve_roi)
+		else:
+			perm_ve, perm_components_ve, perm_abs_max_coef = zip(*output)
+		self.perm_R2_test_ = np.array(perm_ve)
+		self.perm_R2_test_components_ = np.array(perm_components_ve)
+		self.perm_coef_fwer_ = np.array(perm_abs_max_coef)
+		if calulate_pvalues:
+			self.compute_permuted_pvalues()
+	def compute_permuted_pvalues(self):
+		"""
+		Calculates p-values (and FWER p-values) using the permuted null distribution.
+		"""
+		assert hasattr(self,'perm_R2_test_'), "Error: no permuted variables. Run run_permute_pls first."
+		if hasattr(self,'perm_R2_test_targets_'):
+			self.pFWER_test_targets_ = self.fwer_corrected_p(self.perm_R2_test_targets_, self.R2_test_targets_)
+			CompFWER = []
+			for c in range(self.n_components_):
+				CompFWER.append(self.fwer_corrected_p(self.perm_R2_test_components_targets_[:,0,:],self.R2_test_components_targets_[c]))
+			self.pFWER_test_components_targets_ = np.array(CompFWER)
+		self.pvalue_R2_test_ = self.fwer_corrected_p(self.perm_R2_test_, self.R2_test_)[0]
+		self.pvalue_R2_test_components_ = self.fwer_corrected_p(self.perm_R2_test_components_, self.R2_test_components_, apply_fwer_correction = False)
+		coef_p = []
+		for co in range(len(self.model_obj_.coef_)):
+			coef_p.append(self.fwer_corrected_p(self.perm_coef_fwer_[:,co], np.abs(self.model_obj_.coef_[co])))
+		self.pFWER_coef_ = np.array(coef_p).T 
+	def plot_model(self, n_jitters = 1000, png_basename = None, add_Q2_from_train = False):
+		assert hasattr(self,'pvalue_R2_test_'), "Error: Run compute_permuted_pvalues"
+		if n_jitters > self.n_permutations:
+			n_jitters = self.n_permutations
+		n_plots = self.n_components_ + 1
+		p_num = 1
+		plt.subplots(figsize=(int(2*n_plots), 6), dpi=100, tight_layout = True, sharey='row')
+		plt.subplot(1, n_plots, p_num)
+		jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+		rand_dots = self.perm_R2_test_[:n_jitters]
+		plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+		plt.xlim(-.5, .5)
+		plt.ylabel("R2 predicted vs actual (Test Data)")
+		plt.title("Model")
+		plt.scatter(0, self.R2_test_, marker = 'o', alpha = 1.0, c = 'k')
+		if add_Q2_from_train:
+			plt.errorbar(0.1, self.Q2_train_, self.Q2_train_std_, linestyle='None', marker='.', c = 'r', alpha = 0.5)
+		plt.xticks(color='w')
+		p_num += 1
+		x1,x2,y1,y2 = plt.axis()
+		y1 = round(y1,3) - 0.01
+		y2 = round(y2,3) + 0.01
+		plt.ylim(y1, y2)
+		if self.pvalue_R2_test_ == 0:
+			plt.xlabel("R2=%1.3f, P<%1.1e" % (self.R2_test_, (1 / self.n_permutations)), fontsize=10)
+		else:
+			plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_test_, self.pvalue_R2_test_), fontsize=10)
+		for c in range(self.n_components_):
+			plt.subplot(1, n_plots, p_num)
+			jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+			rand_dots = self.perm_R2_test_components_[:n_jitters, c]
+			plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+			plt.xlim(-.5, .5)
+			plt.title("Component %d" % (c+1))
+			plt.scatter(0, self.R2_test_components_[c], marker = 'o', alpha = 1.0, c = 'k')
+			if add_Q2_from_train:
+				plt.errorbar(0.1, self.Q2_train_components_[c], self.Q2_train_components_std_[c], linestyle='None', marker='.', c = 'r', alpha = 0.5)
+			plt.xticks(color='w')
+			plt.ylim(y1, y2)
+			if self.pvalue_R2_test_components_[c] == 0:
+				plt.xlabel("R2=%1.3f, P<%1.1e" % (self.R2_test_components_[c], (1 / self.n_permutations)), fontsize=10)
+			else:
+				plt.xlabel("R2=%1.3f, P=%1.1e" % (self.R2_test_components_[c], self.pvalue_R2_test_components_[c]), fontsize=10)
+			p_num += 1
+		if png_basename is not None:
+			plt.savefig("%s_model_fit_to_test_with_null.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+	def plot_rmsep_components(self, component_range = np.arange(1,11,1), png_basename = None):
+		full_model_rmse = []
+		full_model_ve = []
+		for i in component_range:
+			pls2 = PLSRegression(n_components=i)
+			pls2.fit(self.X_Train_, self.Y_Train_)
+			Y_proj = pls2.predict(self.X_Train_)
+			score = explained_variance_score(self.Y_Train_, Y_proj)
+			full_model_ve.append(score)
+			full_model_rmse.append(mean_squared_error(self.Y_Train_, Y_proj, squared = False))
+		rmse_cv = []
+		ve_cv = []
+		for i in component_range:
+			rmse_cv_by_subject = []
+			CV_temp_rmse = []
+			CV_temp_ve = []
+			for group in self.ugroup_train_:
+				Y_gtrain = self.Y_Train_[self.group_train_ != group]
+				Y_gtest = self.Y_Train_[self.group_train_ == group]
+				X_gtrain = self.X_Train_[self.group_train_ != group]
+				X_gtest = self.X_Train_[self.group_train_ == group]
+				pls2 = PLSRegression(n_components=i)
+				pls2.fit(X_gtrain, Y_gtrain)
+				Y_proj = pls2.predict(X_gtest)
+				CV_temp_ve.append(explained_variance_score(Y_gtest, Y_proj))
+				CV_temp_rmse.append(mean_squared_error(Y_gtest, Y_proj, squared = False))
+			rmse_cv.append(np.mean(CV_temp_rmse))
+			ve_cv.append(np.mean(CV_temp_ve))
+		plt.plot(component_range, np.array(full_model_rmse), c = 'b', label = "Model RMSEP")
+		plt.plot(component_range, np.array(rmse_cv), c = 'r', label = "CV RMSEP")
+		plt.legend()
+		if png_basename is not None:
+			plt.savefig("%s_rmse_versus_component_number.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+		plt.plot(component_range, np.array(full_model_ve), c = 'k', label = "Model R2")
+		plt.plot(component_range, np.array(ve_cv), c = 'r', label = "CV Q2")
+		plt.legend()
+		if png_basename is not None:
+			plt.savefig("%s_R2_versus_component_number.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+
+class bootstraper_parallel():
+	def __init__(self, n_jobs, n_boot = 1000, split = 0.5):
+		self.n_jobs = n_jobs
+		self.n_boot = n_boot
+		self.split = split
+	def nfoldsplit_group(self, group, n_fold = 5, holdout = 0, train_index = None, verbose = False, debug_verbose = False):
+		"""
+		Creates indexed array(s) for k-fold cross validation with holdout option for test data. The ratio of the groups are maintained. To reshuffle the training, if can be passed back through via index_train.
+		The indices are always based on the original grouping variable. i.e., the orignal data.
+		
+		Parameters
+		----------
+		group : array
+			List array with length of number of subjects. 
+		n_fold : int
+			The number of folds
+		holdout : float
+			The amount of data to holdout ranging from 0 to <1. A reasonable holdout is around 0.3 or 30 percent. If holdout = None, then returns test_index = None. (default = 0)
+		train_index : array
+			Indexed array of training data. Holdout must be zero (holdout = 0). It is useful for re-shuffling the fold indices or changing the number of folds.
+		verbose : bool
+			Prints out the splits and some basic information
+		debug_verbose: bool
+			Prints out the indices by group
+		Returns
+		---------
+		train_index : array
+			index array of training data
+		fold_indices : object
+			the index array for each fold (n_folds, training_fold_size)
+		test_index : array or None
+			index array of test data
+		"""
+		test_index = None
+		original_group = group[:]
+		ugroup = np.unique(group)
+		lengroup = len(group)
+		indices = np.arange(0,lengroup,1)
+		if holdout != 0:
+			assert holdout < 1., "Error: Holdout ratio must be >0 and <1.0. Try .3"
+			assert train_index is None, "Error: train index already exists."
+			indx_0 = []
+			indx_1 = []
+			for g in ugroup:
+				pg = np.random.permutation(indices[group==g])
+				indx_0.append(pg[:int(len(pg)*holdout)])
+				indx_1.append(pg[int(len(pg)*holdout):])
+			train_index = np.concatenate(indx_1)
+			test_index = np.concatenate(indx_0)
+			group = group[train_index]
+			if verbose:
+				print("Train data size = %s, Test data size = %s [holdout = %1.2f]" %(len(train_index), len(test_index), holdout))
+		else:
+			if train_index is None:
+				train_index = indices[:]
+			else:
+				group = group[train_index]
+		# reshuffle for good luck
+		gsize = []
+		shuffle_train = []
+		for g in ugroup:
+			pg = np.random.permutation(train_index[group==g])
+			gsize.append(len(pg))
+			shuffle_train.append(pg)
+		train_index = np.concatenate(shuffle_train)
+		group = original_group[train_index]
+		split_sizes = np.divide(gsize, n_fold).astype(int)
+		if verbose:
+			for s in range(len(ugroup)):
+				print("Training group [%s]: size n=%d, split size = %d, remainder = %d" % (ugroup[s], gsize[s], split_sizes[s], int(gsize[s] % split_sizes[s])))
+			if test_index is not None:
+				for s in range(len(ugroup)):
+					original_group[test_index] == ugroup[s]
+					test_size = np.sum((original_group[test_index] == ugroup[s])*1)
+					print("Test group [%s]: size n=%d, holdout percentage = %1.2f" % (ugroup[s], test_size, np.divide(test_size * 100, test_size+gsize[s])))
+		fold_indices = []
+		for n in range(n_fold):
+			temp_index = []
+			for i, g in enumerate(ugroup):
+				temp = train_index[group==g]
+				if n == n_fold-1:
+					temp_index.append(temp[n*split_sizes[i]:])
+				else:
+					temp_index.append(temp[n*split_sizes[i]:((n+1)*split_sizes[i])])
+				if debug_verbose:
+					print(n)
+					print(g)
+					print(original_group[temp_index[-1]])
+					print(temp_index[-1])
+			fold_indices.append(np.concatenate(temp_index))
+		train_index = np.sort(train_index)
+		fold_indices = np.array(fold_indices, dtype = object)
+		if holdout != 0:
+			test_index = np.sort(test_index)
+		if verbose:
+			for i in range(n_fold):
+				print("\nFOLD %d:" % (i+1))
+				print(np.sort(original_group[fold_indices[i]]))
+			if test_index is not None:
+				print("\nTEST:" )
+				print(np.sort(original_group[test_index]))
+		return(fold_indices, train_index, test_index)
+	def bootstrap_by_group(self, group, split = 0.5):
+		ugroup = np.unique(group)
+		lengroup = len(group)
+		indices = np.arange(0,lengroup,1)
+		indx_0 = []
+		indx_1 = []
+		for g in ugroup:
+			pg = np.random.permutation(indices[group==g])
+			indx_0.append(pg[:int(len(pg)*split)])
+			indx_1.append(pg[int(len(pg)*split):])
+		return(np.concatenate(indx_0), np.concatenate(indx_1))
+	def create_nfold(self, X, y, group, n_fold = 10, holdout = 0.3, verbose = True):
+		"""
+		Imports the data and runs nfoldsplit_group.
+		"""
+		fold_indices, train_index, test_index  = self.nfoldsplit_group(group = group,
+																							n_fold = n_fold,
+																							holdout = holdout,
+																							train_index = None,
+																							verbose = verbose,
+																							debug_verbose = False)
+		X_train = X[train_index]
+		y_train = y[train_index]
+		if test_index is not None:
+			X_test= X[test_index]
+			y_test= y[test_index]
+		self.train_index_ = train_index
+		self.fold_indices_ = fold_indices
+		self.test_index_ = test_index
+		self.X_ = X
+		self.y_ = y
+		self.group_ = group
+		self.n_fold_ = n_fold
+		self.X_train_ = X_train
+		self.y_train_ = y_train
+		self.X_test_ = X_test
+		self.y_test_ = y_test
+	def nfold_params_search(self, c, X, y, group, train_index, fold_indices, eta_range = np.arange(.1,1.,.1), n_reshuffle = 1):
+		"""
+		"""
+		n_fold = len(fold_indices)
+		fold_index = np.arange(0,n_fold,1)
+		nspls_runs = n_fold*n_reshuffle
+		K = c + 1
+		cQ2_SEARCH = np.zeros((len(eta_range)))
+		cQ2_SEARCH_SD = np.zeros((len(eta_range)))
+		cRMSEP_CV_SEARCH = np.zeros((len(eta_range)))
+		cRMSEP_CV_SEARCH_SD = np.zeros((len(eta_range)))
+		for e, eta in enumerate(eta_range):
+			temp_Q2 = np.zeros((nspls_runs))
+			temp_rmse = np.zeros((nspls_runs))
+			if ((K+1) < X[train_index].shape[1]) and (y[train_index].shape[1] > (K+1)):
+				p = 0
+				for i in range(n_reshuffle):
+					if n_reshuffle > 1:
+						fold_indices, _, _ = self.nfoldsplit_group(group = group,
+																			n_fold = n_fold,
+																			holdout = 0,
+																			train_index = train_index,
+																			verbose = False,
+																			debug_verbose = False)
+					for n in range(n_fold):
+						sel_train = fold_indices[n]
+						sel_test = np.concatenate(fold_indices[fold_index != n])
+						tmpX_train = X[sel_train]
+						tmpY_train = y[sel_train]
+						tmpX_test = X[sel_test]
+						tmpY_test = y[sel_test]
+						# kick out effective zero predictors
+						tmpX_test = tmpX_test[:,tmpX_train.std(0) > 0.0001]
+						tmpX_train = tmpX_train[:,tmpX_train.std(0) > 0.0001]
+						spls2 = spls_rwrapper(n_components = K, eta = eta)
+						spls2.fit(tmpX_train, tmpY_train)
+						Y_proj = spls2.predict(tmpX_test)
+						temp_Q2[p] = explained_variance_score(tmpY_test, Y_proj)
+						temp_rmse[p] = mean_squared_error(tmpY_test, Y_proj, squared = False)
+						p += 1
+				cQ2_SEARCH[e] = np.mean(temp_Q2)
+				cQ2_SEARCH_SD[e] = np.std(temp_Q2)
+				cRMSEP_CV_SEARCH[e] = np.mean(temp_rmse)
+				cRMSEP_CV_SEARCH_SD[e] = np.std(temp_rmse)
+			else:
+				cQ2_SEARCH[e] = 0
+				cQ2_SEARCH_SD[e] = 0
+				cRMSEP_CV_SEARCH[e] = 1
+				cRMSEP_CV_SEARCH_SD[e] = 1
+		print("Component %d finished" % K)
+		return(c, cQ2_SEARCH, cQ2_SEARCH_SD, cRMSEP_CV_SEARCH, cRMSEP_CV_SEARCH_SD)
+	def nfold_cv_params_search_spls(self, eta_range = np.arange(.1,1.,.1), n_reshuffle = 1, max_n_comp = 10):
+		assert hasattr(self,'fold_indices_'), "Error: No fold indices. Run create_nfold first"
+		assert isinstance(n_reshuffle, (int, np.integer)), "Error: n_reshuffle must be an interger"
+		# parallel by max_n_comp
+		output = Parallel(n_jobs=min(self.n_jobs,max_n_comp), backend='multiprocessing')(delayed(self.nfold_params_search)(c, X = self.X_, y = self.y_, group = self.group_, train_index = self.train_index_, fold_indices = self.fold_indices_, eta_range = eta_range, n_reshuffle = n_reshuffle) for c in range(max_n_comp))
+		ord_k, Q2_SEARCH, Q2_SEARCH_SD, RMSEP_CV_SEARCH, RMSEP_CV_SEARCH_SD = zip(*output)
+		ord_k = np.array(ord_k)
+		Q2_SEARCH = np.row_stack(Q2_SEARCH)[ord_k]
+		Q2_SEARCH_SD = np.row_stack(Q2_SEARCH_SD)[ord_k]
+		RMSEP_CV_SEARCH = np.row_stack(RMSEP_CV_SEARCH)[ord_k]
+		RMSEP_CV_SEARCH_SD = np.row_stack(RMSEP_CV_SEARCH_SD)[ord_k]
+		# re-ordering stuff Comp [low to high], Eta [low to high]
+		self.Q2_SEARCH_ = Q2_SEARCH.T
+		self.Q2_SEARCH_SD_ = Q2_SEARCH_SD.T
+		self.RMSEP_CV_SEARCH_ = RMSEP_CV_SEARCH.T
+		self.RMSEP_CV_SEARCH_SD_ = RMSEP_CV_SEARCH_SD.T
+		self.search_eta_range_ = eta_range[::-1]
+		self.max_n_comp_ = max_n_comp
+		xy = (self.RMSEP_CV_SEARCH_ == np.nanmin(self.RMSEP_CV_SEARCH_))*1
+		print_optimal_values = True
+		try:
+			self.best_K_ = int(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
+		except:
+			print_optimal_values = False
+			print("Warning: multiple components have the best value.")
+			print(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
+			self.best_K_ = np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0]
+		try:
+			self.best_eta_ = float(self.search_eta_range_[xy.mean(1) > 0])
+		except:
+			print_optimal_values = False
+			print("Warning: multiple sparsity thresholds have the best value.")
+			print(self.search_eta_range_[xy.mean(1) > 0])
+			self.best_eta_ = self.search_eta_range_[xy.mean(1) > 0]
+		if print_optimal_values:
+			print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
+	def group_params_searcher(self, c, X, y, group, eta_range = np.arange(.1,1.,.1)):
+		K = c + 1
+		ugroup = np.unique(group)
+		cQ2_SEARCH = np.zeros((len(eta_range)))
+		cQ2_SEARCH_SD = np.zeros((len(eta_range)))
+		cRMSEP_CV_SEARCH = np.zeros((len(eta_range)))
+		cRMSEP_CV_SEARCH_SD = np.zeros((len(eta_range)))
+		for e, eta in enumerate(eta_range):
+			temp_Q2 = []
+			temp_rmse = []
+			if ((K+1) < X.shape[1]) and (y.shape[1] > (K+1)):
+				for g in ugroup:
+					Y_train = y[group != g]
+					X_train = X[group != g]
+					X_test = X[group == g]
+					Y_test = y[group == g]
+					# kick out effective zero predictors
+					X_test = X_test[:,X_train.std(0) > 0.0001]
+					X_train = X_train[:,X_train.std(0) > 0.0001]
+					spls2 = spls_rwrapper(n_components = K, eta = eta)
+					spls2.fit(X_train, Y_train)
+					Y_proj = spls2.predict(X_test)
+					temp_Q2.append(explained_variance_score(Y_test, Y_proj))
+					temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
+				cQ2_SEARCH[e] = np.mean(temp_Q2)
+				cQ2_SEARCH_SD[e] = np.std(temp_Q2)
+				cRMSEP_CV_SEARCH[e] = np.mean(temp_rmse)
+				cRMSEP_CV_SEARCH_SD[e] = np.std(temp_rmse)
+			else:
+				cQ2_SEARCH[e] = 0
+				cQ2_SEARCH_SD[e] = 0
+				cRMSEP_CV_SEARCH[e] = 1
+				cRMSEP_CV_SEARCH_SD[e] = 1
+		print("Component %d finished" % K)
+		return(c, cQ2_SEARCH, cQ2_SEARCH_SD, cRMSEP_CV_SEARCH, cRMSEP_CV_SEARCH_SD)
+	def group_cv_params_search_spls(self, X, y, group, eta_range = np.arange(.1,1.,.1), max_n_comp = 10):
+		# parallel by max_n_comp
+		output = Parallel(n_jobs=min(self.n_jobs,max_n_comp))(delayed(self.group_params_searcher)(c, X = X, y = y, group = group, eta_range = eta_range) for c in range(max_n_comp))
+		ord_k, Q2_SEARCH, Q2_SEARCH_SD, RMSEP_CV_SEARCH, RMSEP_CV_SEARCH_SD = zip(*output)
+		ord_k = np.array(ord_k)
+		Q2_SEARCH = np.row_stack(Q2_SEARCH)[ord_k]
+		Q2_SEARCH_SD = np.row_stack(Q2_SEARCH_SD)[ord_k]
+		RMSEP_CV_SEARCH = np.row_stack(RMSEP_CV_SEARCH)[ord_k]
+		RMSEP_CV_SEARCH_SD = np.row_stack(RMSEP_CV_SEARCH_SD)[ord_k]
+		# re-ordering stuff Comp [low to high], Eta [low to high]
+		self.Q2_SEARCH_ = Q2_SEARCH.T
+		self.Q2_SEARCH_SD_ = Q2_SEARCH_SD.T
+		self.RMSEP_CV_SEARCH_ = RMSEP_CV_SEARCH.T
+		self.RMSEP_CV_SEARCH_SD_ = RMSEP_CV_SEARCH_SD.T
+		self.search_eta_range_ = eta_range[::-1]
+		self.max_n_comp_ = max_n_comp
+		xy = (self.RMSEP_CV_SEARCH_ == np.nanmin(self.RMSEP_CV_SEARCH_))*1
+		print_optimal_values = True
+		try:
+			self.best_K_ = int(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
+		except:
+			print_optimal_values = False
+			print("Warning: multiple components have the best value.")
+			print(np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0])
+			self.best_K_ = np.arange(1,self.max_n_comp_+1,1)[xy.mean(0) > 0]
+		try:
+			self.best_eta_ = float(self.search_eta_range_[xy.mean(1) > 0])
+		except:
+			print_optimal_values = False
+			print("Warning: multiple sparsity thresholds have the best value.")
+			print(self.search_eta_range_[xy.mean(1) > 0])
+			self.best_eta_ = self.search_eta_range_[xy.mean(1) > 0]
+		if print_optimal_values:
+			print("Best N-components = %d, Best eta = %1.2f" % (self.best_K_, self.best_eta_))
+
+	def plot_cv_params_search_spls(self, nan_unstable = False, png_basename = None):
+		assert hasattr(self,'best_eta_'), "Error: run cv_params_search_spls"
+		
+		#Q2
+		Q2_SEARCH = self.Q2_SEARCH_
+		if nan_unstable:
+			Q2_SEARCH[Q2_SEARCH < 0] = np.nan
+		else:
+			Q2_SEARCH[Q2_SEARCH < 0] = 0
+		plt.imshow(Q2_SEARCH, interpolation = None, cmap='jet')
+		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
+		plt.ylabel('eta (sparsity)')
+		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
+		plt.xlabel('Components')
+		plt.colorbar()
+		plt.title("Q-Squared [CV]")
+		if png_basename is not None:
+			plt.savefig("%s_feature_selection_Q2.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+
+		Q2_SEARCH = self.Q2_SEARCH_
+		Q2_SEARCH_SD = self.Q2_SEARCH_SD_
+		if nan_unstable:
+			Q2_SEARCH_SD[Q2_SEARCH < 0] = np.nan
+		plt.imshow(Q2_SEARCH_SD, interpolation = None, cmap='jet_r')
+		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
+		plt.ylabel('eta (sparsity)')
+		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
+		plt.xlabel('Components')
+		plt.colorbar()
+		plt.title("Q-Squared [CV] St. Dev.")
+		if png_basename is not None:
+			plt.savefig("%s_feature_selection_Q2_SD.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+
+		Q2_SEARCH_RATIO = np.divide(self.Q2_SEARCH_, self.Q2_SEARCH_SD_)
+		if nan_unstable:
+			Q2_SEARCH_RATIO[Q2_SEARCH < 0] = np.nan
+		else:
+			Q2_SEARCH_RATIO[Q2_SEARCH < 0] = 0
+		plt.imshow(Q2_SEARCH_RATIO, interpolation = None, cmap='jet')
+		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
+		plt.ylabel('eta (sparsity)')
+		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
+		plt.xlabel('Components')
+		plt.colorbar()
+		plt.title("Q-Squared [CV] / St. Dev.")
+		if png_basename is not None:
+			plt.savefig("%s_feature_selection_Q2divSD.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+
+		RMSEP_CV_SEARCH = self.RMSEP_CV_SEARCH_
+		if nan_unstable:
+			RMSEP_CV_SEARCH[RMSEP_CV_SEARCH > 1] = np.nan
+		else:
+			RMSEP_CV_SEARCH[RMSEP_CV_SEARCH > 1] = 1.
+		plt.imshow(self.RMSEP_CV_SEARCH_, interpolation = None, cmap='jet_r')
+		plt.yticks(range(len(self.search_eta_range_)),[s[:3] for s in self.search_eta_range_.astype(str)])
+		plt.ylabel('eta (sparsity)')
+		plt.xticks(range(self.max_n_comp_),np.arange(1,self.max_n_comp_+1,1))
+		plt.xlabel('Components')
+		plt.colorbar()
+		plt.title("RMSEP [CV]")
+		if png_basename is not None:
+			plt.savefig("%s_feature_selection_RMSEP.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+
+	def bootstrap_spls(self, i, X, y, n_comp, group, split, eta):
+		if i % 100 == 0: 
+			print("Bootstrap : %d" % (i))
+		train_idx, _ = self.bootstrap_by_group(group = group, split = split)
+		X = X[train_idx]
+		y = y[train_idx]
+		boot_spls2 = spls_rwrapper(n_components = n_comp, eta = eta)
+		boot_spls2.fit(X, y)
+		selector = np.zeros((X.shape[1]))
+		selector[boot_spls2.selectedvariablesindex_] = 1
+		return(selector)
+	def run_bootstrap_spls(self, X, y, n_comp, group, eta, split = 0.5):
+		selected_vars = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self.bootstrap_spls)(i, X = X, y = y, n_comp = n_comp, group = group, split = self.split, eta = eta) for i in range(self.n_boot))
+		self.selected_vars_ = np.array(selected_vars)
+		self.selected_vars_mean_ = np.mean(selected_vars, 0)
+		self.X = X  # I need to fix this
+		self.y = y
+		self.n_comp = n_comp
+		self.eta = eta
+		self.split = split
+		self.group = group
+		self.ugroup = np.unique(group)
+	def nfold_cv_search_array(self, search_array = np.arange(.2,1.,.05)):
+		assert hasattr(self,'selected_vars_mean_'), "Error: bootstrap parallel is missing"
+		ve_cv = []
+		rmse_cv = []
+		ve_cv_std = []
+		rmse_cv_std = []
+		full_model_ve = []
+		full_model_rmse = []
+		n_fold = len(self.fold_indices_)
+		fold_index = np.arange(0,n_fold,1)
+		for s in search_array:
+			print("\nSelection Threshold = %1.2f" % np.round(s,3))
+			selection_mask = self.selected_vars_mean_ > s
+			CV_temp_rmse = []
+			CV_temp_ve = []
+			X_SEL = self.X_[:,selection_mask]
+			print("\nNumber of Selected Variables: %d from %s " % (X_SEL.shape[1], self.X_.shape[1]))
+			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
+				components_variance_explained_test = np.zeros((self.n_fold_, self.n_comp))
+				for n in range(self.n_fold_):
+					sel_train = self.fold_indices_[n]
+					sel_test = np.concatenate(self.fold_indices_[fold_index != n])
+					X_train =X_SEL[sel_train]
+					Y_train = self.y_[sel_train]
+					X_test = X_SEL[sel_test]
+					Y_test = self.y_[sel_test]
+					pls2 = PLSRegression(n_components=self.n_comp).fit(X_train, Y_train)
+					Y_proj = pls2.predict(X_test)
+					score = explained_variance_score(Y_test, Y_proj)
+					print("FOLD %d : %1.3f" % ((n+1), score))
+					CV_temp_ve.append(score)
+					CV_temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
+					x_scores_test, y_scores_test = pls2.transform(X_test, Y_test)
+					for c in range(self.n_comp):
+						yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_test.std(axis=0, ddof=1) + Y_test.mean(axis=0)
+						components_variance_explained_test[n, c] = explained_variance_score(Y_test, yhat_c)
+				print("CV MODEL : %1.3f +/- %1.3f" % (np.mean(CV_temp_ve), np.std(CV_temp_ve)))
+				for c in range(self.n_comp):
+					print("  CV COMP%d : %1.3f +/- %1.3f" % ((c+1), np.mean(components_variance_explained_test, 0)[c], np.std(components_variance_explained_test, 0)[c]))
+				rmse_cv.append(np.mean(CV_temp_rmse))
+				ve_cv.append(np.mean(CV_temp_ve))
+				rmse_cv_std.append(np.std(CV_temp_rmse))
+				ve_cv_std.append(np.std(CV_temp_ve))
+				# full model
+				X_SEL = self.X_train_[:,selection_mask]
+				Y_actual = self.y_train_
+				pls2 = PLSRegression(n_components=self.n_comp).fit(X_SEL, Y_actual)
+				Y_proj = pls2.predict(X_SEL)
+				score = explained_variance_score(Y_actual, Y_proj)
+				print("TRAIN FULL MODEL : %1.3f" % (score))
+				x_scores_test, y_scores_test = pls2.transform(X_SEL, Y_actual)
+				for c in range(self.n_comp):
+					yhat_c = np.dot(x_scores_test[:,c].reshape(-1,1), pls2.y_loadings_[:,c].reshape(-1,1).T) * Y_actual.std(axis=0, ddof=1) + Y_actual.mean(axis=0)
+					print("  TRAIN COMP%d : %1.3f" % ((c+1),explained_variance_score(Y_actual, yhat_c)))
+				full_model_ve.append(score)
+				full_model_rmse.append(mean_squared_error(Y_actual, Y_proj, squared = False))
+			else:
+				rmse_cv.append(0.)
+				ve_cv.append(0.)
+				rmse_cv_std.append(0.)
+				ve_cv_std.append(0.)
+				full_model_ve.append(0.)
+				full_model_rmse.append(0.)
+		self.RMSEP_CV_ = np.array(rmse_cv)
+		self.Q2_ = np.array(ve_cv)
+		self.RMSEP_CV_SD_ = np.array(rmse_cv_std)
+		self.Q2_SD_ = np.array(ve_cv_std)
+		self.RMSEP_LEARN_ = np.array(full_model_rmse)
+		self.R2_LEARN_ = np.array(full_model_ve)
+		self.search_thresholds_ = search_array
+	def cv_search_array(self, search_array = np.arange(.2,1.,.05)):
+		assert hasattr(self,'selected_vars_mean_'), "Error: bootstrap parallel is missing"
+		ve_cv = []
+		rmse_cv = []
+		ve_cv_std = []
+		rmse_cv_std = []
+		full_model_ve = []
+		full_model_rmse = []
+		for s in search_array:
+			print(np.round(s,3))
+			selection_mask = self.selected_vars_mean_ > s
+			CV_temp_rmse = []
+			CV_temp_ve = []
+			X_SEL = self.X[:,selection_mask]
+			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
+				for g in self.ugroup:
+					Y_train = self.y[self.group != g]
+					X_train = X_SEL[self.group != g]
+					X_test = X_SEL[self.group == g]
+					Y_test = self.y[self.group == g]
+					pls2 = PLSRegression(n_components=self.n_comp).fit(X_train, Y_train)
+					Y_proj = pls2.predict(X_test)
+					score = explained_variance_score(Y_test, Y_proj)
+					print("%s : %1.3f" % (g, score))
+					CV_temp_ve.append(score)
+					CV_temp_rmse.append(mean_squared_error(Y_test, Y_proj, squared = False))
+				print("CV MODEL : %1.3f +/- %1.3f" % (np.mean(CV_temp_ve), np.std(CV_temp_ve)))
+				rmse_cv.append(np.mean(CV_temp_rmse))
+				ve_cv.append(np.mean(CV_temp_ve))
+				rmse_cv_std.append(np.std(CV_temp_rmse))
+				ve_cv_std.append(np.std(CV_temp_ve))
+				# full model
+				pls2 = PLSRegression(n_components=self.n_comp).fit(X_SEL, self.y)
+				Y_proj = pls2.predict(X_SEL)
+				score = explained_variance_score(self.y, Y_proj)
+				print("MODEL : %1.3f" % (score))
+				full_model_ve.append(score)
+				full_model_rmse.append(mean_squared_error(self.y, Y_proj, squared = False))
+			else:
+				rmse_cv.append(0.)
+				ve_cv.append(0.)
+				rmse_cv_std.append(0.)
+				ve_cv_std.append(0.)
+				full_model_ve.append(0.)
+				full_model_rmse.append(0.)
+		self.RMSEP_CV_ = np.array(rmse_cv)
+		self.Q2_ = np.array(ve_cv)
+		self.RMSEP_CV_SD_ = np.array(rmse_cv_std)
+		self.Q2_SD_ = np.array(ve_cv_std)
+		self.RMSEP_LEARN_ = np.array(full_model_rmse)
+		self.R2_LEARN_ = np.array(full_model_ve)
+		self.search_thresholds_ = search_array
+	def plot_cv_search_array(self, png_basename = None):
+		assert hasattr(self,'search_thresholds_'), "Error: run cv_search_array"
+		isvalid_sd = np.zeros((len(self.search_thresholds_)), dtype = bool)
+		for i, s in enumerate(self.search_thresholds_):
+			selection_mask = self.selected_vars_mean_ > s
+			CV_temp_rmse = []
+			CV_temp_ve = []
+			X_SEL = self.X[:,selection_mask]
+			if ((self.n_comp+1) < X_SEL.shape[1]) and (self.y.shape[1] > (self.n_comp+1)):
+				isvalid_sd[i] = True
+		isvalid_sd[self.Q2_SD_ > 1] = False
+		Xthresholds = self.search_thresholds_
+		Q2_values = self.Q2_
+		Q2_values[Q2_values < 0] = 0 
+		plt.plot(Xthresholds, Q2_values, color='blue')
+		plt.fill_between(Xthresholds[isvalid_sd], self.Q2_[isvalid_sd]-self.Q2_SD_[isvalid_sd], self.Q2_[isvalid_sd]+self.Q2_SD_[isvalid_sd], alpha=0.5, edgecolor='blue', facecolor='lightsteelblue', linestyle=":")
+		plt.ylabel('Q-Squared')
+		plt.xlabel('Selection Threshold')
+		plt.xticks(Xthresholds, [s[:4] for s in np.round(Xthresholds,3).astype(str)])
+		plt.title("sPLS Model: Components = %d, eta = %1.2f, n_boot = %d" % (self.n_comp, self.eta, self.n_boot))
+		if png_basename is not None:
+			plt.savefig("%s_feature_selection_thresholds.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+
+
 
 
 #class spls_mixOmics_rwrapper:
