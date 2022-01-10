@@ -291,7 +291,7 @@ class parallel_scca():
 		Q2_mean = np.mean(temp_Q2)
 		Q2_std = np.std(temp_Q2)
 		if debug:
-			print(K)
+			print(n_components)
 			print(l1x_pen)
 			print(l1y_pen)
 			print(Q2_mean)
@@ -336,8 +336,8 @@ class parallel_scca():
 																																	optimize_primary_component = optimize_primary_component,
 																																	optimize_global_redundancy_index = optimize_global_redundancy_index,
 																																	optimize_selected_variables = optimize_selected_variables,
-																																	max_iter = max_iter
-																																	seed = seed_grid[i,j,k]) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
+																																	max_iter = max_iter,
+																																	seed = seed_grid[i, j, k]) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
 		output_mean, output_sd = zip(*output)
 		count = 0
 		best_component = 0
