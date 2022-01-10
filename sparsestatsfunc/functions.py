@@ -419,6 +419,88 @@ class parallel_scca():
 				else:
 					plt.show()
 
+	def plot_canonical_correlations(self, png_basename = None, component = None, swapXY = False, Xlabel = None, Ylabel = None):
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		score_x_train, score_y_train = self.model_obj_.transform(self.X_train_, self.y_train_)
+		score_x_test, score_y_test = self.model_obj_.transform(self.X_test_, self.y_test_)
+		if component is not None:
+			c = component -1
+			if swapXY:
+				plt.scatter(score_y_train[:,c], score_x_train[:,c])
+				b, m = np.polynomial.polynomial.polyfit(score_y_train[:,c], score_x_train[:,c],1)
+				plt.plot(score_y_train[:,c], b + m * score_y_train[:,c], '-')
+			else:
+				plt.scatter(score_x_train[:,c], score_y_train[:,c])
+				b, m = np.polynomial.polynomial.polyfit(score_x_train[:,c], score_y_train[:,c],1)
+				plt.plot(score_x_train[:,c], b + m * score_x_train[:,c], '-')
+			if Xlabel is not None:
+				plt.xlabel(Xlabel)
+			if Ylabel is not None:
+				plt.ylabel(Xlabel)
+			plt.title("Canonical variate %d" % (c+1))
+			if png_basename is not None:
+				plt.savefig("%s_canonical_corr_train_component%d.png" % (png_basename, component))
+				plt.close()
+			else:
+				plt.show()
+			if swapXY:
+				plt.scatter(score_y_test[:,c], score_x_test[:,c])
+				b, m = np.polynomial.polynomial.polyfit(score_y_test[:,c], score_x_test[:,c],1)
+				plt.plot(score_y_test[:,c], b + m * score_y_test[:,c], '-')
+			else:
+				plt.scatter(score_x_test[:,c], score_y_test[:,c])
+				b, m = np.polynomial.polynomial.polyfit(score_x_test[:,c], score_y_test[:,c],1)
+				plt.plot(score_x_test[:,c], b + m * score_x_test[:,c], '-')
+			if Xlabel is not None:
+				plt.xlabel(Xlabel)
+			if Ylabel is not None:
+				plt.ylabel(Xlabel)
+			plt.title("Canonical variate %d" % (c+1))
+			if png_basename is not None:
+				plt.savefig("%s_canonical_corr_test_component%d.png" % (png_basename, component))
+				plt.close()
+			else:
+				plt.show()
+		else:
+			for c in range(self.n_components_):
+				component = int(c+1)
+				if swapXY:
+					plt.scatter(score_y_train[:,c], score_x_train[:,c])
+					b, m = np.polynomial.polynomial.polyfit(score_y_train[:,c], score_x_train[:,c],1)
+					plt.plot(score_y_train[:,c], b + m * score_y_train[:,c], '-')
+				else:
+					plt.scatter(score_x_train[:,c], score_y_train[:,c])
+					b, m = np.polynomial.polynomial.polyfit(score_x_train[:,c], score_y_train[:,c],1)
+					plt.plot(score_x_train[:,c], b + m * score_x_train[:,c], '-')
+				if Xlabel is not None:
+					plt.xlabel(Xlabel)
+				if Ylabel is not None:
+					plt.ylabel(Xlabel)
+				plt.title("Canonical Component %d [Train]" % (c+1))
+				if png_basename is not None:
+					plt.savefig("%s_canonical_corr_train_component%d.png" % (png_basename, component))
+					plt.close()
+				else:
+					plt.show()
+				if swapXY:
+					plt.scatter(score_y_test[:,c], score_x_test[:,c])
+					b, m = np.polynomial.polynomial.polyfit(score_y_test[:,c], score_x_test[:,c],1)
+					plt.plot(score_y_test[:,c], b + m * score_y_test[:,c], '-')
+				else:
+					plt.scatter(score_x_test[:,c], score_y_test[:,c])
+					b, m = np.polynomial.polynomial.polyfit(score_x_test[:,c], score_y_test[:,c],1)
+					plt.plot(score_x_test[:,c], b + m * score_x_test[:,c], '-')
+				if Xlabel is not None:
+					plt.xlabel(Xlabel)
+				if Ylabel is not None:
+					plt.ylabel(Xlabel)
+				plt.title("Canonical Component %d [Test]" % (c+1))
+				if png_basename is not None:
+					plt.savefig("%s_canonical_corr_test_component%d.png" % (png_basename, component))
+					plt.close()
+				else:
+					plt.show()
+
 	def _pearsonr_to_t(self, r, N):
 		tvalues = r / np.sqrt(np.divide((1-(r*r)),(N-2)))
 		pvalues = t.sf(np.abs(tvalues), N-1)*2
@@ -511,6 +593,20 @@ class parallel_scca():
 			self.tvalue_Y_train_targets_ = t
 			self.qvalue_Y_train_targets_ = fdrcorrection(p)[1]
 
+		t,p = self._pearsonr_to_t(self.X_loadings, len(self.X_train_))
+		self.pvalue_X_loadings_ = p
+		self.tvalue_X_loadings_targets_ = t
+		self.qvalue_X_loadings_ = np.zeros_like(self.X_loadings)
+		for c in range(n_components):
+			self.qvalue_X_loadings_[:,c] = fdrcorrection(p[:,c])[1]
+
+		t,p = self._pearsonr_to_t(self.Y_loadings, len(self.y_train_))
+		self.pvalue_Y_loadings_ = p
+		self.tvalue_Y_loadings_targets_ = t
+		self.qvalue_Y_loadings_ = np.zeros_like(self.Y_loadings)
+		for c in range(n_components):
+			self.qvalue_Y_loadings_[:,c] = fdrcorrection(p[:,c])[1]
+
 		# Calculate R2 squared for test data
 		X_Test_hat, Y_Test_hat = scca.predict(X_Test, Y_Test, toself = toself)
 		self.R2_X_test_ = scca._r2score(X_Test, X_Test_hat, squared = calc_squared_correlation)
@@ -571,20 +667,20 @@ class parallel_scca():
 			X_VE_ROI = None
 			Y_VE_ROI = None
 		if permute_loadings:
-			perm_X_loadings = perm_ssca.x_loadings_
-			perm_Y_loadings = perm_ssca.y_loadings_
+			perm_X_sqr_rcs_ = np.square(perm_ssca.x_loadings_) # squared canonical coefficient
+			perm_Y_sqr_rcs_ = np.square(perm_ssca.y_loadings_)
 		else:
-			perm_X_loadings = None
-			perm_Y_loadings = None
+			perm_X_sqr_rcs_ = None
+			perm_Y_sqr_rcs_ = None
 		X_RDI = perm_ssca.x_redundacy_variance_explained_components_
 		Y_RDI = perm_ssca.y_redundacy_variance_explained_components_
 		CANCORS = perm_ssca.canonicalcorr(self.X_test_, self.y_test_)
-		return(X_VE, Y_VE, X_RDI, Y_RDI, CANCORS, X_VE_ROI, Y_VE_ROI, perm_X_loadings, perm_Y_loadings)
+		return(X_VE, Y_VE, X_RDI, Y_RDI, CANCORS, X_VE_ROI, Y_VE_ROI, perm_X_sqr_rcs_, perm_Y_sqr_rcs_)
 	def run_permute_scca(self, compute_targets = True, calulate_pvalues = True, permute_loadings = False):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		seeds = generate_seeds(self.n_permutations)
 		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_scca)(p, compute_targets = compute_targets, permute_loadings = permute_loadings, calc_squared_correlation = self.calc_squared_correlation_, seed = seeds[p]) for p in range(self.n_permutations))
-		perm_X_VE, perm_Y_VE, perm_X_RDI, perm_Y_RDI, perm_CANCORS, perm_X_VE_ROI, perm_Y_VE_ROI, perm_X_loadings, perm_Y_loadings = zip(*output)
+		perm_X_VE, perm_Y_VE, perm_X_RDI, perm_Y_RDI, perm_CANCORS, perm_X_VE_ROI, perm_Y_VE_ROI, perm_X_sqr_rcs_, perm_Y_sqr_rcs_ = zip(*output)
 		self.perm_R2_X_test_ = np.array(perm_X_VE)
 		self.perm_R2_Y_test_ = np.array(perm_Y_VE)
 		self.perm_RDI_X_ = np.array(perm_X_RDI)
@@ -594,8 +690,8 @@ class parallel_scca():
 			self.perm_R2_X_test_targets_ = np.array(perm_X_VE_ROI)
 			self.perm_R2_Y_test_targets_ = np.array(perm_Y_VE_ROI)
 		if permute_loadings:
-			self.perm_X_loadings_ = np.array(perm_X_loadings)
-			self.perm_Y_loadings_ = np.array(perm_Y_loadings)
+			self.perm_X_sqr_rcs_ = np.array(perm_X_sqr_rcs_)
+			self.perm_Y_sqr_rcs_ = np.array(perm_Y_sqr_rcs_)
 		if calulate_pvalues:
 			self.compute_permuted_pvalues()
 	def fwer_corrected_p(self, permuted_arr, target, right_tail_probability = True, apply_fwer_correction = True):
@@ -643,13 +739,20 @@ class parallel_scca():
 		"""
 		assert hasattr(self,'perm_R2_X_test_'), "Error: no permuted variables. Run run_permute_scca first."
 		if hasattr(self,'perm_R2_X_test_targets_'):
+			self.perm_pvalue_test_X_targets_ = self.fwer_corrected_p(self.perm_R2_X_test_targets_, self.R2_X_test_targets_, apply_fwer_correction = False)
+			self.perm_pvalue_test_Y_targets_ = self.fwer_corrected_p(self.perm_R2_Y_test_targets_, self.R2_Y_test_targets_, apply_fwer_correction = False)
 			self.pFWER_test_X_targets_ = self.fwer_corrected_p(self.perm_R2_X_test_targets_, self.R2_X_test_targets_)
 			self.pFWER_test_Y_targets_ = self.fwer_corrected_p(self.perm_R2_Y_test_targets_, self.R2_Y_test_targets_)
+		if hasattr(self,'perm_X_sqr_rcs_'):
+			self.perm_pvalue_X_loadings_ = self.fwer_corrected_p(self.perm_X_sqr_rcs_, np.square(self.X_loadings), apply_fwer_correction = False)
+			self.perm_pvalue_Y_loadings_ = self.fwer_corrected_p(self.perm_Y_sqr_rcs_, np.square(self.Y_loadings), apply_fwer_correction = False)
 		self.perm_pvalue_R2_X_test_ = self.fwer_corrected_p(self.perm_R2_X_test_, self.R2_X_test_)[0]
 		self.perm_pvalue_R2_Y_test_ = self.fwer_corrected_p(self.perm_R2_Y_test_, self.R2_Y_test_)[0]
 		self.perm_pvalue_R2_test_ = self.fwer_corrected_p(np.sort((self.perm_R2_X_test_ + self.perm_R2_Y_test_)/2), ((self.R2_X_test_ + self.R2_Y_test_) /2))[0]
 		self.perm_pvalue_RDI_X_train_components_ = self.fwer_corrected_p(self.perm_RDI_X_, self.RDI_X_train_components_, apply_fwer_correction = False)
 		self.perm_pvalue_RDI_Y_train_components_ = self.fwer_corrected_p(self.perm_RDI_Y_, self.RDI_Y_train_components_, apply_fwer_correction = False)
+		self.perm_pvalue_RDI_X_train_ = self.fwer_corrected_p(self.perm_RDI_X_.sum(1), self.RDI_X_train_components_.sum(), apply_fwer_correction = False)
+		self.perm_pvalue_RDI_Y_train_ = self.fwer_corrected_p(self.perm_RDI_Y_.sum(1), self.RDI_Y_train_components_.sum(), apply_fwer_correction = False)
 		self.perm_pvalue_canonicalcorrelation_ = self.fwer_corrected_p(self.perm_canonicalcorrelation_, self.canonicalcorrelation_test_, apply_fwer_correction = False)
 	def plot_permuted_canonical_correlations(self, png_basename = None, n_jitters = 1000, add_Q2_from_train = False, plot_model = False):
 		assert hasattr(self,'perm_pvalue_R2_test_'), "Error: Run compute_permuted_pvalues"
@@ -843,8 +946,10 @@ class scca_rwrapper:
 #			https://pure.uvt.nl/ws/portalfiles/portal/596531/useofcaa_ab5.pdf and https://scholarscompass.vcu.edu/cgi/viewcontent.cgi?article=1001&context=socialwork_pubs
 			n_x = X.shape[1]
 			n_y = y.shape[1]
+			# the loadings are equivalent to the structure coefficient. Square of the loading (squared structure coefficient) is the proportion of variance each variable shares with the canonical variate/component.
 			self.x_loadings_ = np.corrcoef(self.x_scores_.T, X.T)[self.n_components:,0:self.n_components]
 			self.y_loadings_ = np.corrcoef(self.y_scores_.T, y.T)[self.n_components:,0:self.n_components]
+			# Another measure of effect size. The redundacy component is the amount of variance in the X account by Y through each canonical variate/component (X->Y and Y->X are not equivlent). 
 			self.x_redundacy_variance_explained_components_ = np.mean(self.x_loadings_**2)*(self.cors**2)
 			self.x_redundacy_variance_explained_global_ = np.sum(self.x_redundacy_variance_explained_components_)
 			self.y_redundacy_variance_explained_components_ = np.mean(self.y_loadings_**2)*(self.cors**2)
