@@ -576,6 +576,7 @@ class parallel_scca():
 		self.R2_Y_train_targets_ = scca._r2score(Y_Train, Y_Train_hat, mean_r2 = False, squared = calc_squared_correlation)
 		self.RDI_X_train_components_ = scca.x_redundacy_variance_explained_components_
 		self.RDI_Y_train_components_ = scca.y_redundacy_variance_explained_components_
+		self.RDI_global_ np.divide(np.sum(scca.x_redundacy_variance_explained_components_) + np.sum(scca.y_redundacy_variance_explained_components_), 2)
 		self.canonicalcorrelation_train_ = scca.cors
 		self.pvalue_canonicalcorrelation_train_ = self._pearsonr_to_t(scca.cors, len(scca.X_))[1]
 		self.X_loadings = scca.x_loadings_
@@ -744,15 +745,20 @@ class parallel_scca():
 			self.pFWER_test_X_targets_ = self.fwer_corrected_p(self.perm_R2_X_test_targets_, self.R2_X_test_targets_)
 			self.pFWER_test_Y_targets_ = self.fwer_corrected_p(self.perm_R2_Y_test_targets_, self.R2_Y_test_targets_)
 		if hasattr(self,'perm_X_sqr_rcs_'):
-			self.perm_pvalue_X_loadings_ = self.fwer_corrected_p(self.perm_X_sqr_rcs_, np.square(self.X_loadings), apply_fwer_correction = False)
-			self.perm_pvalue_Y_loadings_ = self.fwer_corrected_p(self.perm_Y_sqr_rcs_, np.square(self.Y_loadings), apply_fwer_correction = False)
+			self.perm_pvalue_X_loadings_ = np.zeros_like(self.X_loadings)
+			self.perm_pvalue_Y_loadings_ = np.zeros_like(self.Y_loadings)
+			for c in range(self.n_components_):
+				self.perm_pvalue_X_loadings_[:,c] = self.fwer_corrected_p(self.perm_X_sqr_rcs_[:,:,c], np.square(self.X_loadings)[:,c], apply_fwer_correction = False)
+				self.perm_pvalue_Y_loadings_[:,c] = self.fwer_corrected_p(self.perm_Y_sqr_rcs_[:,:,c], np.square(self.Y_loadings)[:,c], apply_fwer_correction = False)
 		self.perm_pvalue_R2_X_test_ = self.fwer_corrected_p(self.perm_R2_X_test_, self.R2_X_test_)[0]
 		self.perm_pvalue_R2_Y_test_ = self.fwer_corrected_p(self.perm_R2_Y_test_, self.R2_Y_test_)[0]
 		self.perm_pvalue_R2_test_ = self.fwer_corrected_p(np.sort((self.perm_R2_X_test_ + self.perm_R2_Y_test_)/2), ((self.R2_X_test_ + self.R2_Y_test_) /2))[0]
 		self.perm_pvalue_RDI_X_train_components_ = self.fwer_corrected_p(self.perm_RDI_X_, self.RDI_X_train_components_, apply_fwer_correction = False)
 		self.perm_pvalue_RDI_Y_train_components_ = self.fwer_corrected_p(self.perm_RDI_Y_, self.RDI_Y_train_components_, apply_fwer_correction = False)
-		self.perm_pvalue_RDI_X_train_ = self.fwer_corrected_p(self.perm_RDI_X_.sum(1), self.RDI_X_train_components_.sum(), apply_fwer_correction = False)
-		self.perm_pvalue_RDI_Y_train_ = self.fwer_corrected_p(self.perm_RDI_Y_.sum(1), self.RDI_Y_train_components_.sum(), apply_fwer_correction = False)
+		self.perm_pvalue_RDI_X_train_ = self.fwer_corrected_p(np.sum(self.perm_RDI_X_, 1), np.sum(self.RDI_X_train_components_))[0]
+		self.perm_pvalue_RDI_Y_train_ = self.fwer_corrected_p(np.sum(self.perm_RDI_Y_, 1), np.sum(self.RDI_Y_train_components_))[0]
+		self.perm_pvalue_RDI_model_ = self.fwer_corrected_p(np.divide(np.sum(self.perm_RDI_X_, 1) + np.sum(self.perm_RDI_Y_, 1),2), np.divide(np.sum(self.RDI_X_train_components_) + np.sum(self.RDI_Y_train_components_),2))[0]
+
 		self.perm_pvalue_canonicalcorrelation_ = self.fwer_corrected_p(self.perm_canonicalcorrelation_, self.canonicalcorrelation_test_, apply_fwer_correction = False)
 	def plot_permuted_canonical_correlations(self, png_basename = None, n_jitters = 1000, add_Q2_from_train = False, plot_model = False):
 		assert hasattr(self,'perm_pvalue_R2_test_'), "Error: Run compute_permuted_pvalues"
