@@ -229,7 +229,7 @@ class parallel_scca():
 		"""
 		return CV 
 		"""
-		if _reshuffle > 1:
+		if n_reshuffle > 1:
 			if seed is None:
 				np.random.seed(np.random.randint(4294967295))
 			else:
