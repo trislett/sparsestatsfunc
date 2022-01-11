@@ -576,7 +576,7 @@ class parallel_scca():
 		self.R2_Y_train_targets_ = scca._r2score(Y_Train, Y_Train_hat, mean_r2 = False, squared = calc_squared_correlation)
 		self.RDI_X_train_components_ = scca.x_redundacy_variance_explained_components_
 		self.RDI_Y_train_components_ = scca.y_redundacy_variance_explained_components_
-		self.RDI_global_ np.divide(np.sum(scca.x_redundacy_variance_explained_components_) + np.sum(scca.y_redundacy_variance_explained_components_), 2)
+		self.RDI_global_ = np.divide(np.sum(scca.x_redundacy_variance_explained_components_) + np.sum(scca.y_redundacy_variance_explained_components_), 2)
 		self.canonicalcorrelation_train_ = scca.cors
 		self.pvalue_canonicalcorrelation_train_ = self._pearsonr_to_t(scca.cors, len(scca.X_))[1]
 		self.X_loadings = scca.x_loadings_
