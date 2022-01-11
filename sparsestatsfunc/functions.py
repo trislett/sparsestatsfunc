@@ -266,27 +266,27 @@ class parallel_scca():
 				elif optimize_global_redundancy_index:
 					temp_Q2[p] = cvscca.x_redundacy_variance_explained_global_
 				else: 
-					tmpX_test_predicted, tmpY_test_predicted = cvscca.predict(X = tmpX_test, y = tmpY_test, toself = True)
+					tmpX_test_predicted, tmpY_test_predicted = cvscca.predict(X = tmpX_test, y = tmpY_test, toself = False)
 					if (optimize_x*optimize_y)==1:
 						if optimize_selected_variables:
-							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test[:,cvscca.x_selectedvariablesindex_==1], tmpX_test_predicted[:,cvscca.x_selectedvariablesindex_==1]) + cvscca._r2score(tmpY_test[:,cvscca.y_selectedvariablesindex_==1], tmpY_test_predicted[:,cvscca.y_selectedvariablesindex_==1])), 2)
+							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test[:,cvscca.x_selectedvariablesindex_==1], tmpX_test_predicted[:,cvscca.x_selectedvariablesindex_==1], squared = False) + cvscca._r2score(tmpY_test[:,cvscca.y_selectedvariablesindex_==1], tmpY_test_predicted[:,cvscca.y_selectedvariablesindex_==1], squared = False)), 2)
 						else:
-							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test, tmpX_test_predicted) + cvscca._r2score(tmpY_test, tmpY_test_predicted)), 2)
+							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test, tmpX_test_predicted, squared = False) + cvscca._r2score(tmpY_test, tmpY_test_predicted, squared = False)), 2)
 					elif optimize_x:
 						if optimize_selected_variables:
-							temp_Q2[p] = cvscca._r2score(tmpX_test[:,cvscca.x_selectedvariablesindex_==1], tmpX_test_predicted[:,cvscca.x_selectedvariablesindex_==1])
+							temp_Q2[p] = cvscca._r2score(tmpX_test[:,cvscca.x_selectedvariablesindex_==1], tmpX_test_predicted[:,cvscca.x_selectedvariablesindex_==1], squared = False)
 						else:
-							temp_Q2[p] = cvscca._r2score(tmpX_test, tmpX_test_predicted)
+							temp_Q2[p] = cvscca._r2score(tmpX_test, tmpX_test_predicted, squared = False)
 					elif optimize_y:
 						if optimize_selected_variables:
-							temp_Q2[p] = cvscca._r2score(tmpY_test[:,cvscca.y_selectedvariablesindex_==1], tmpY_test_predicted[:,cvscca.y_selectedvariablesindex_==1])
+							temp_Q2[p] = cvscca._r2score(tmpY_test[:,cvscca.y_selectedvariablesindex_==1], tmpY_test_predicted[:,cvscca.y_selectedvariablesindex_==1], squared = False)
 						else:
-							temp_Q2[p] = cvscca._r2score(tmpY_test, tmpY_test_predicted)
+							temp_Q2[p] = cvscca._r2score(tmpY_test, tmpY_test_predicted, squared = False)
 					else:
 						if optimize_selected_variables:
-							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test[:,cvscca.x_selectedvariablesindex_==1], tmpX_test_predicted[:,cvscca.x_selectedvariablesindex_==1]) + cvscca._r2score(tmpY_test[:,cvscca.y_selectedvariablesindex_==1], tmpY_test_predicted[:,cvscca.y_selectedvariablesindex_==1])), 2)
+							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test[:,cvscca.x_selectedvariablesindex_==1], tmpX_test_predicted[:,cvscca.x_selectedvariablesindex_==1], squared = False) + cvscca._r2score(tmpY_test[:,cvscca.y_selectedvariablesindex_==1], tmpY_test_predicted[:,cvscca.y_selectedvariablesindex_==1], squared = False)), 2)
 						else:
-							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test, tmpX_test_predicted) + cvscca._r2score(tmpY_test, tmpY_test_predicted)), 2)
+							temp_Q2[p] = np.divide((cvscca._r2score(tmpX_test, tmpX_test_predicted, squared = False) + cvscca._r2score(tmpY_test, tmpY_test_predicted, squared = False)), 2)
 				p+1
 		Q2_mean = np.mean(temp_Q2)
 		Q2_std = np.std(temp_Q2)
@@ -418,7 +418,54 @@ class parallel_scca():
 					plt.close()
 				else:
 					plt.show()
-
+	def plot_component_range(self, lamdba_x, lamdba_y, component_range = [1, 16], png_basename = None):
+		fold_indices = pscca.fold_indices_
+		n_fold = len(fold_indices)
+		X = np.array(pscca.X_)
+		Y = np.array(pscca.y_)
+		fold_index = np.arange(0,n_fold,1)
+		comp_range = np.arange(int(component_range[0]), int(component_range[1]+1), 1)
+		n_comps = len(comp_range)
+		cv_ve = np.zeros((n_comps))
+		cv_vex = np.zeros((n_comps))
+		cv_vey = np.zeros((n_comps))
+		cv_ve_err = np.zeros((n_comps))
+		cv_vex_err = np.zeros((n_comps))
+		cv_vey_err = np.zeros((n_comps))
+		for i, c in enumerate(comp_range):
+			cv_corr = []
+			cv_corr_x = []
+			cv_corr_y = []
+			for n in range(n_fold):
+				sel_train = fold_indices[n]
+				sel_test = np.concatenate(fold_indices[fold_index != n])
+				tmpX_train = X[sel_train]
+				tmpY_train = y[sel_train]
+				tmpX_test = X[sel_test]
+				tmpY_test = y[sel_test]
+				n_samples = tmpX_train.shape[0]
+				n_features = tmpX_train.shape[1]
+				n_targets = tmpY_train.shape[1]
+				cvscca = scca_rwrapper(n_components = c, X_L1_penalty = lamdba_x, y_L1_penalty =  lamdba_y, max_iter = 100).fit(tmpX_train, tmpY_train)
+				tmpX_test_predicted, tmpY_test_predicted = cvscca.predict(X = tmpX_test, y = tmpY_test, toself = False)
+				corr_x = cvscca._r2score(tmpX_test, tmpX_test_predicted, squared = False)
+				corr_y = cvscca._r2score(tmpY_test, tmpY_test_predicted, squared = False)
+				cv_corr_x.append(corr_x)
+				cv_corr_y.append(corr_y)
+				cv_corr.append((corr_x + corr_y)/2)
+			cv_ve[i] = np.mean(cv_corr)
+			cv_vex[i] = np.mean(cv_corr_x)
+			cv_vey[i] = np.mean(cv_corr_y)
+			cv_ve_err[i] = np.std(cv_corr)
+			cv_vex_err[i] = np.std(cv_corr_x)
+			cv_vey_err[i] = np.std(cv_corr_y)
+		plt.plot(comp_range, cv_ve)
+		plt.fill_between(comp_range, cv_ve-cv_ve_err, cv_ve+cv_ve_err, alpha = 0.5)
+		if png_basename is not None:
+			plt.savefig("%s_cv_test_prediction_component_range.png" % (png_basename))
+			plt.close()
+		else:
+			plt.show()
 	def plot_canonical_correlations(self, png_basename = None, component = None, swapXY = False, Xlabel = None, Ylabel = None):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		score_x_train, score_y_train = self.model_obj_.transform(self.X_train_, self.y_train_)
