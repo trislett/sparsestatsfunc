@@ -81,7 +81,7 @@ class parallel_scca():
 		self.n_jobs = n_jobs
 		self.n_permutations = n_permutations
 	def _check(self):
-		print("05_02_2022")
+		print("2022_03_01")
 	def index_perm(self, unique_arr, arr, variable, within_group = True):
 		"""
 		Shuffles an array within group (within_group = True) or the groups (within_group = False)
@@ -276,8 +276,8 @@ class parallel_scca():
 					tmpX_test_predicted, tmpY_test_predicted = cvscca.predict(X = tmpX_test,
 																								y = tmpY_test,
 																								toself = True)
-					pscorex = cvscca._r2score(tmpX_test[:,selx], tmpX_test_predicted[:,selx], squared = False)
-					pscorey = cvscca._r2score(tmpY_test[:,sely], tmpY_test_predicted[:,sely], squared = False)
+					pscorex = cvscca._rscore(tmpX_test[:,selx], tmpX_test_predicted[:,selx])
+					pscorey = cvscca._rscore(tmpY_test[:,sely], tmpY_test_predicted[:,sely])
 					if (optimize_x*optimize_y)==1:
 						temp_Q2[p] = np.divide((pscorex + pscorey), 2)
 					elif optimize_x:
@@ -444,8 +444,8 @@ class parallel_scca():
 					selx[cvscca.x_selectedvariablesindex_ == 0] = False
 					sely[cvscca.y_selectedvariablesindex_ == 0] = False
 				tmpX_test_predicted, tmpY_test_predicted = cvscca.predict(X = tmpX_test, y = tmpY_test, toself = True)
-				corr_x = cvscca._r2score(tmpX_test[:,selx], tmpX_test_predicted[:,selx], squared = False)
-				corr_y = cvscca._r2score(tmpY_test[:,sely], tmpY_test_predicted[:,sely], squared = False)
+				corr_x = cvscca._rscore(tmpX_test[:,selx], tmpX_test_predicted[:,selx])
+				corr_y = cvscca._rscore(tmpY_test[:,sely], tmpY_test_predicted[:,sely])
 				cv_corr_x.append(corr_x)
 				cv_corr_y.append(corr_y)
 				cv_corr.append((corr_x + corr_y)/2)
@@ -574,7 +574,7 @@ class parallel_scca():
 		pvalues = t.sf(np.abs(tvalues), N-1)*2
 		return(tvalues, pvalues)
 
-	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20, calc_squared_correlation = True, toself = False):
+	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20, toself = False):
 		"""
 		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
 		"""
@@ -611,10 +611,10 @@ class parallel_scca():
 											X_L1_penalty = X_L1_penalty, y_L1_penalty =  y_L1_penalty,
 											max_iter = max_iter).fit(X_gtrain, Y_gtrain, calculate_loadings = True)
 			X_gtest_hat, Y_gtest_hat = cvscca.predict(X = X_gtest, y = Y_gtest, toself = toself)
-			X_CV_Q2[g] = cvscca._r2score(X_gtest, X_gtest_hat, squared = calc_squared_correlation)
-			Y_CV_Q2[g] = cvscca._r2score(Y_gtest, Y_gtest_hat, squared = calc_squared_correlation)
-			X_CV_Q2_roi[g] = cvscca._r2score(X_gtest, X_gtest_hat, mean_r2 = False, squared = calc_squared_correlation)
-			Y_CV_Q2_roi[g] = cvscca._r2score(Y_gtest, Y_gtest_hat, mean_r2 = False, squared = calc_squared_correlation)
+			X_CV_Q2[g] = cvscca._rscore(X_gtest, X_gtest_hat)
+			Y_CV_Q2[g] = cvscca._rscore(Y_gtest, Y_gtest_hat)
+			X_CV_Q2_roi[g] = cvscca._rscore(X_gtest, X_gtest_hat, mean_score = False)
+			Y_CV_Q2_roi[g] = cvscca._rscore(Y_gtest, Y_gtest_hat, mean_score = False)
 			X_CV_redundacy[g] = cvscca.x_redundacy_variance_explained_components_
 			Y_CV_redundacy[g] = cvscca.y_redundacy_variance_explained_components_
 			CV_canonicalcorrelation[g] = cvscca.canonicalcorr(X_gtest, Y_gtest)
@@ -640,8 +640,8 @@ class parallel_scca():
 		self.R2_X_train_ = scca.x_variance_explained_
 		self.R2_Y_train_ = scca.y_variance_explained_
 		X_Train_hat, Y_Train_hat = scca.predict(X = X_Train, y = Y_Train)
-		self.R2_X_train_targets_ = scca._r2score(X_Train, X_Train_hat, mean_r2 = False, squared = calc_squared_correlation)
-		self.R2_Y_train_targets_ = scca._r2score(Y_Train, Y_Train_hat, mean_r2 = False, squared = calc_squared_correlation)
+		self.R2_X_train_targets_ = scca._rscore(X_Train, X_Train_hat, mean_score = False)
+		self.R2_Y_train_targets_ = scca._rscore(Y_Train, Y_Train_hat, mean_score = False)
 		self.RDI_X_train_components_ = scca.x_redundacy_variance_explained_components_
 		self.RDI_Y_train_components_ = scca.y_redundacy_variance_explained_components_
 		self.RDI_global_ = np.divide(np.sum(scca.x_redundacy_variance_explained_components_) + np.sum(scca.y_redundacy_variance_explained_components_), 2)
@@ -649,18 +649,18 @@ class parallel_scca():
 		self.pvalue_canonicalcorrelation_train_ = self._pearsonr_to_t(scca.cors, len(scca.X_))[1]
 		self.X_loadings = scca.x_loadings_
 		self.Y_loadings = scca.y_loadings_
-		if not calc_squared_correlation:
-			self.pvalue_X_train_ = self._pearsonr_to_t(self.R2_X_train_, len(X_Train))[1]
-			t,p = self._pearsonr_to_t(self.R2_X_train_targets_, len(X_Train))
-			self.pvalue_X_train_targets_ = p
-			self.tvalue_X_train_targets_ = t
-			self.qvalue_X_train_targets_ = fdrcorrection(p)[1]
 
-			self.pvalue_Y_train_ = self._pearsonr_to_t(self.R2_Y_train_, len(Y_Test))[1]
-			t,p = self._pearsonr_to_t(self.R2_Y_train_targets_, len(Y_Train))
-			self.pvalue_Y_train_targets_ = p
-			self.tvalue_Y_train_targets_ = t
-			self.qvalue_Y_train_targets_ = fdrcorrection(p)[1]
+		self.pvalue_X_train_ = self._pearsonr_to_t(self.R2_X_train_, len(X_Train))[1]
+		t,p = self._pearsonr_to_t(self.R2_X_train_targets_, len(X_Train))
+		self.pvalue_X_train_targets_ = p
+		self.tvalue_X_train_targets_ = t
+		self.qvalue_X_train_targets_ = fdrcorrection(p)[1]
+
+		self.pvalue_Y_train_ = self._pearsonr_to_t(self.R2_Y_train_, len(Y_Test))[1]
+		t,p = self._pearsonr_to_t(self.R2_Y_train_targets_, len(Y_Train))
+		self.pvalue_Y_train_targets_ = p
+		self.tvalue_Y_train_targets_ = t
+		self.qvalue_Y_train_targets_ = fdrcorrection(p)[1]
 
 		t,p = self._pearsonr_to_t(self.X_loadings, len(self.X_train_))
 		self.pvalue_X_loadings_ = p
@@ -678,23 +678,24 @@ class parallel_scca():
 
 		# Calculate R2 squared for test data
 		X_Test_hat, Y_Test_hat = scca.predict(X_Test, Y_Test, toself = toself)
-		self.R2_X_test_ = scca._r2score(X_Test, X_Test_hat, squared = calc_squared_correlation)
-		self.R2_Y_test_ = scca._r2score(Y_Test, Y_Test_hat, squared = calc_squared_correlation)
-		self.R2_X_test_targets_ = scca._r2score(X_Test, X_Test_hat, mean_r2 = False, squared = calc_squared_correlation)
-		self.R2_Y_test_targets_ = scca._r2score(Y_Test, Y_Test_hat, mean_r2 = False, squared = calc_squared_correlation)
+		self.R2_X_test_ = scca._rscore(X_Test, X_Test_hat)
+		self.R2_Y_test_ = scca._rscore(Y_Test, Y_Test_hat)
+		self.R2_X_test_targets_ = scca._rscore(X_Test, X_Test_hat, mean_score = False)
+		self.R2_Y_test_targets_ = scca._rscore(Y_Test, Y_Test_hat, mean_score = False)
 		self.canonicalcorrelation_test_ = scca.canonicalcorr(self.X_test_, self.y_test_)
 		self.pvalue_canonicalcorrelation_test_ = self._pearsonr_to_t(self.canonicalcorrelation_test_, len(self.X_test_))[1]
-		if not calc_squared_correlation:
-			self.pvalue_X_test_ = self._pearsonr_to_t(self.R2_X_test_, len(X_Test))[1]
-			t,p = self._pearsonr_to_t(self.R2_X_test_targets_, len(X_Test))
-			self.pvalue_X_test_targets_ = p
-			self.tvalue_X_test_targets_ = t
-			self.qvalue_X_test_targets_ = fdrcorrection(p)[1]
-			self.pvalue_Y_test_ = self._pearsonr_to_t(self.R2_Y_test_, len(Y_Test))[1]
-			t,p = self._pearsonr_to_t(self.R2_Y_test_targets_, len(Y_Test))
-			self.pvalue_Y_test_targets_ = p
-			self.tvalue_Y_test_targets_ = t
-			self.qvalue_Y_test_targets_ = fdrcorrection(p)[1]
+
+		self.pvalue_X_test_ = self._pearsonr_to_t(self.R2_X_test_, len(X_Test))[1]
+		t,p = self._pearsonr_to_t(self.R2_X_test_targets_, len(X_Test))
+		self.pvalue_X_test_targets_ = p
+		self.tvalue_X_test_targets_ = t
+		self.qvalue_X_test_targets_ = fdrcorrection(p)[1]
+		self.pvalue_Y_test_ = self._pearsonr_to_t(self.R2_Y_test_, len(Y_Test))[1]
+		t,p = self._pearsonr_to_t(self.R2_Y_test_targets_, len(Y_Test))
+		self.pvalue_Y_test_targets_ = p
+		self.tvalue_Y_test_targets_ = t
+		self.qvalue_Y_test_targets_ = fdrcorrection(p)[1]
+
 		self.n_components_ = n_components
 		self.X_L1_penalty_ = X_L1_penalty
 		self.y_L1_penalty_ = y_L1_penalty
@@ -703,9 +704,8 @@ class parallel_scca():
 		self.ugroup_train_ = ugroup_train
 		self.model_obj_ = scca
 		self.toself_ = toself
-		self.calc_squared_correlation_ = calc_squared_correlation
 
-	def _permute_function_scca(self, p, compute_targets = True, mask_sparsity = True, calc_squared_correlation = True, permute_loadings = False, seed = None):
+	def _permute_function_scca(self, p, compute_targets = True, mask_sparsity = True, permute_loadings = False, seed = None):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		
 		if seed is None:
@@ -726,11 +726,11 @@ class parallel_scca():
 											y_L1_penalty =  self.y_L1_penalty_,
 											max_iter = self.max_iter_).fit(X_perm, Y_perm, calculate_loadings = True)
 		perm_X_Test_hat, perm_Y_Test_hat = perm_ssca.predict(self.X_test_, self.y_test_, toself = self.toself_)
-		X_VE = perm_ssca._r2score(self.X_test_, perm_X_Test_hat, squared = calc_squared_correlation)
-		Y_VE = perm_ssca._r2score(self.y_test_, perm_Y_Test_hat, squared = calc_squared_correlation)
+		X_VE = perm_ssca._rscore(self.X_test_, perm_X_Test_hat)
+		Y_VE = perm_ssca._rscore(self.y_test_, perm_Y_Test_hat)
 		if compute_targets:
-			X_VE_ROI = perm_ssca._r2score(self.X_test_, perm_X_Test_hat, mean_r2 = False, squared = calc_squared_correlation)
-			Y_VE_ROI = perm_ssca._r2score(self.y_test_, perm_Y_Test_hat, mean_r2 = False, squared = calc_squared_correlation)
+			X_VE_ROI = perm_ssca._rscore(self.X_test_, perm_X_Test_hat, mean_score = False)
+			Y_VE_ROI = perm_ssca._rscore(self.y_test_, perm_Y_Test_hat, mean_score = False)
 		else:
 			X_VE_ROI = None
 			Y_VE_ROI = None
@@ -747,7 +747,7 @@ class parallel_scca():
 	def run_permute_scca(self, compute_targets = True, calulate_pvalues = True, permute_loadings = False):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		seeds = generate_seeds(self.n_permutations)
-		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_scca)(p, compute_targets = compute_targets, permute_loadings = permute_loadings, calc_squared_correlation = self.calc_squared_correlation_, seed = seeds[p]) for p in range(self.n_permutations))
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_scca)(p, compute_targets = compute_targets, permute_loadings = permute_loadings, seed = seeds[p]) for p in range(self.n_permutations))
 		perm_X_VE, perm_Y_VE, perm_X_RDI, perm_Y_RDI, perm_CANCORS, perm_X_VE_ROI, perm_Y_VE_ROI, perm_X_sqr_rcs_, perm_Y_sqr_rcs_ = zip(*output)
 		self.perm_R2_X_test_ = np.array(perm_X_VE)
 		self.perm_R2_Y_test_ = np.array(perm_Y_VE)
@@ -905,7 +905,6 @@ class parallel_scca():
 		else:
 			plt.show()
 
-
 class scca_rwrapper:
 	"""
 	
@@ -1017,22 +1016,34 @@ class scca_rwrapper:
 		self.cors = self.canonicalcorr()
 		if calculate_loadings:
 #			https://pure.uvt.nl/ws/portalfiles/portal/596531/useofcaa_ab5.pdf and https://scholarscompass.vcu.edu/cgi/viewcontent.cgi?article=1001&context=socialwork_pubs
-			n_x = X.shape[1]
-			n_y = y.shape[1]
 			# the loadings are equivalent to the structure coefficient. Square of the loading (squared structure coefficient) is the proportion of variance each variable shares with the canonical variate/component.
-			self.x_loadings_ = np.corrcoef(self.x_scores_.T, X.T)[self.n_components:,0:self.n_components]
-			self.y_loadings_ = np.corrcoef(self.y_scores_.T, y.T)[self.n_components:,0:self.n_components]
+			self.x_loadings_ = self._calculate_loadings(self.x_scores_, X)
+			self.y_loadings_ = self._calculate_loadings(self.y_scores_, y)
 			# Another measure of effect size. The redundacy component is the amount of variance in the X account by Y through each canonical variate/component (X->Y and Y->X are not equivlent). 
 			self.x_redundacy_variance_explained_components_ = np.mean(self.x_loadings_**2)*(self.cors**2)
 			self.x_redundacy_variance_explained_global_ = np.sum(self.x_redundacy_variance_explained_components_)
 			self.y_redundacy_variance_explained_components_ = np.mean(self.y_loadings_**2)*(self.cors**2)
 			self.y_redundacy_variance_explained_global_ = np.sum(self.y_redundacy_variance_explained_components_)
 			X_hat, Y_hat = self.predict(X = X, y = y)
-			self.x_variance_explained_ = self._r2score(self.X_, X_hat)
-			self.y_variance_explained_ = self._r2score(self.y_, Y_hat)
-			self.x_variance_explained_selected_ = self._r2score(self.X_[:,self.x_selectedvariablesindex_==1], X_hat[:,self.x_selectedvariablesindex_==1])
-			self.y_variance_explained_selected_ = self._r2score(self.y_[:,self.y_selectedvariablesindex_==1], Y_hat[:,self.y_selectedvariablesindex_==1])
+			self.x_variance_explained_ = self._rscore(self.X_, X_hat)
+			self.y_variance_explained_ = self._rscore(self.y_, Y_hat)
+			self.x_variance_explained_selected_ = self._rscore(self.X_[:,self.x_selectedvariablesindex_==1], X_hat[:,self.x_selectedvariablesindex_==1])
+			self.y_variance_explained_selected_ = self._rscore(self.y_[:,self.y_selectedvariablesindex_==1], Y_hat[:,self.y_selectedvariablesindex_==1])
 		return(self)
+
+	def _calculate_loadings(self, data_scores, data):
+		"""
+		calculates loadings using cython optimizated least square regression
+		returns loading with the shape n_components, n_targets
+		"""
+		
+		n_components = data_scores.shape[1]
+		n_targets = data.shape[1]
+		loadings = np.zeros((n_components, n_targets))
+		for c in range(n_components):
+			loadings[c,:] = cy_lin_lstsqr_mat(scale(data_scores[:,c].reshape(-1,1)), data)[0]
+		return(loadings)
+
 	def transform(self, X = None, y = None):
 		"""
 		Calculate the component scores for selected variables.
@@ -1062,16 +1073,24 @@ class scca_rwrapper:
 		y_scores = np.dot(y, self.y_weights_)
 		cancors = np.corrcoef(x_scores.T, y_scores.T).diagonal(self.n_components)
 		return(cancors)
-	def _r2score(self, true, predicted, mean_r2 = True, squared = True):
-		true = np.array(true.T)
-		predicted = np.array(predicted.T)
-		score = np.corrcoef(true, scale(predicted)).diagonal(len(true))
-		if squared:
-			score = np.sign(score) * score**2
-		if mean_r2:
+
+	def _predicton_cor(self, true, predicted):
+		"""
+		Calculates the correlation between the true and predicted values.
+		
+		The same method used is this citation:
+		Bilenko NY, Gallant JL. Pyrcca: Regularized Kernel Canonical Correlation Analysis in Python and Its Applications to Neuroimaging. Front Neuroinform. 2016 Nov 22;10:49. doi: 10.3389/fninf.2016.00049.
+		"""
+		n_targets = true.shape[1]
+		return(np.array([cy_lin_lstsqr_mat(true[:,target].reshape(-1,1), predicted[:,target])[0] for target in range(n_targets)]))
+
+	def _rscore(self, true, predicted, mean_score = True):
+		score = self._predicton_cor(true, predicted)
+		if mean_score:
 			return(np.mean(score))
 		else:
 			return(score)
+
 	def predict(self, X = None, y = None, toself = False):
 		"""
 		Predict X or y by calculating canonical scores from the model, and then dotting be the inverse of the model weights by the canonical scores.
