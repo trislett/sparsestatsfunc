@@ -5,7 +5,7 @@ from distutils.command.sdist import sdist
 from setuptools import setup, find_packages
 
 PACKAGE_NAME = "sparsestatsfunc"
-BUILD_REQUIRES = ["numpy", "scipy", "argparse", "matplotlib", "pandas", "matplotlib", "nibabel", "cython", "scikit-learn", "scikit-image", "rpy2"]
+BUILD_REQUIRES = ["numpy", "scipy", "statsmodels", "argparse", "matplotlib", "pandas", "matplotlib", "nibabel", "cython", "scikit-learn", "scikit-image", "rpy2"]
 
 CLASSIFIERS = ["Development Status :: 3 - Alpha",
   "Environment :: Console",

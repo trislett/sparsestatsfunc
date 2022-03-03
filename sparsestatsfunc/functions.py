@@ -227,6 +227,7 @@ class parallel_scca():
 		self.y_train_ = y_train
 		self.X_test_ = X_test
 		self.y_test_ = y_test
+
 	def _scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, n_reshuffle = 1, max_iter = 20, verbose = True, optimize_x = False, optimize_y = False, optimize_primary_component = False, optimize_global_redundancy_index = False, optimize_selected_variables = True, seed = None):
 		"""
 		return CV 
@@ -574,9 +575,38 @@ class parallel_scca():
 		pvalues = t.sf(np.abs(tvalues), N-1)*2
 		return(tvalues, pvalues)
 
+	def _bootstrap_loadings(self, i, seed = None):
+		"""
+		Bootstrap values for the training data's loadings with replacement. It's probably better to just use the permutation testing.
+		"""
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		if seed is None:
+			np.random.seed(np.random.randint(4294967295))
+		else:
+			np.random.seed(seed)
+		if i % 200 == 0:
+			print(i)
+		subindex = np.array(self.train_index_)
+		bindex = np.random.choice(subindex, replace = True, size = len(subindex))
+		bxscore, byscore = self.model_obj_.transform(self.X_[bindex], self.y_[bindex])
+		bxloading = self.model_obj_._calculate_loadings(bxscore, self.X_[bindex])
+		byloading = self.model_obj_._calculate_loadings(byscore, self.y_[bindex])
+		return(bxloading, byloading)
+
+	def run_permute_scca(self, n_bootstrap = 10000, compute_targets = True, calulate_pvalues = True, permute_loadings = False):
+		"""
+		Bootstrap values for the training data's loadings with replacement. It's probably better to just use the permutation testing.
+		"""
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		seeds = generate_seeds(self.n_permutations)
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(_bootstrap_loadings)(i, seed = seeds[i]) for i in range(n_bootstrap))
+		bxloading, byloading = zip(*output)
+		self.boostrapped_X_loadings = np.array(bxloading)
+		self.boostrapped_Y_loadings = np.array(byloading)
+
 	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20, toself = False):
 		"""
-		Calcules R2_train, R2_train_components, Q2_train, Q2_train_components, R2_test, R2_test_components for overal model and targets
+		Calculates r_train, r_train_components, q_train, q_train_components, r_test, r_test_components for overal model and targets
 		"""
 		assert hasattr(self,'X_train_'), "Error: run create_nfold"
 		
@@ -591,7 +621,6 @@ class parallel_scca():
 			grouping_var[self.fold_indices_[i]] = "FOLD%d" % (i+1)
 		group_train = grouping_var[self.train_index_]
 		ugroup_train = np.unique(group_train)
-		
 		self.cvgroups_ = grouping_var
 
 		# Calculate Q2 squared
@@ -735,7 +764,7 @@ class parallel_scca():
 			X_VE_ROI = None
 			Y_VE_ROI = None
 		if permute_loadings:
-			perm_X_sqr_rcs_ = np.square(perm_ssca.x_loadings_) # squared canonical coefficient
+			perm_X_sqr_rcs_ = np.square(perm_ssca.x_loadings_)
 			perm_Y_sqr_rcs_ = np.square(perm_ssca.y_loadings_)
 		else:
 			perm_X_sqr_rcs_ = None
@@ -815,8 +844,8 @@ class parallel_scca():
 			self.perm_pvalue_X_loadings_ = np.zeros_like(self.X_loadings)
 			self.perm_pvalue_Y_loadings_ = np.zeros_like(self.Y_loadings)
 			for c in range(self.n_components_):
-				self.perm_pvalue_X_loadings_[:,c] = self.fwer_corrected_p(self.perm_X_sqr_rcs_[:,:,c], np.square(self.X_loadings)[:,c], apply_fwer_correction = False)
-				self.perm_pvalue_Y_loadings_[:,c] = self.fwer_corrected_p(self.perm_Y_sqr_rcs_[:,:,c], np.square(self.Y_loadings)[:,c], apply_fwer_correction = False)
+				self.perm_pvalue_X_loadings_[c,:] = self.fwer_corrected_p(self.perm_X_sqr_rcs_[:,c,:], np.square(self.X_loadings)[c,:], apply_fwer_correction = False)
+				self.perm_pvalue_Y_loadings_[c,:] = self.fwer_corrected_p(self.perm_Y_sqr_rcs_[:,c,:], np.square(self.Y_loadings)[c,:], apply_fwer_correction = False)
 		self.perm_pvalue_R2_X_test_ = self.fwer_corrected_p(self.perm_R2_X_test_, self.R2_X_test_)[0]
 		self.perm_pvalue_R2_Y_test_ = self.fwer_corrected_p(self.perm_R2_Y_test_, self.R2_Y_test_)[0]
 		self.perm_pvalue_R2_test_ = self.fwer_corrected_p(np.sort((self.perm_R2_X_test_ + self.perm_R2_Y_test_)/2), ((self.R2_X_test_ + self.R2_Y_test_) /2))[0]
@@ -1074,7 +1103,7 @@ class scca_rwrapper:
 		cancors = np.corrcoef(x_scores.T, y_scores.T).diagonal(self.n_components)
 		return(cancors)
 
-	def _predicton_cor(self, true, predicted):
+	def _prediction_cor(self, true, predicted):
 		"""
 		Calculates the correlation between the true and predicted values.
 		
@@ -1085,7 +1114,7 @@ class scca_rwrapper:
 		return(np.array([cy_lin_lstsqr_mat(true[:,target].reshape(-1,1), predicted[:,target])[0] for target in range(n_targets)]))
 
 	def _rscore(self, true, predicted, mean_score = True):
-		score = self._predicton_cor(true, predicted)
+		score = self._prediction_cor(true, predicted)
 		if mean_score:
 			return(np.mean(score))
 		else:
