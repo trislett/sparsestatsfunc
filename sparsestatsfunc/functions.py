@@ -456,7 +456,7 @@ class parallel_scca():
 		"""
 		Base function to calculates permuted loading.
 		"""
-				assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		if seed is None:
 			np.random.seed(np.random.randint(4294967295))
 		else:
