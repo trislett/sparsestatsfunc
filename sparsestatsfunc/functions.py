@@ -413,162 +413,7 @@ class parallel_scca():
 					plt.close()
 				else:
 					plt.show()
-	def plot_component_range(self, lamdba_x, lamdba_y, component_range = [1, 16], plotx = True, ploty = True, selected_subset = False, png_basename = None):
-		fold_indices = self.fold_indices_
-		n_fold = len(fold_indices)
-		X = np.array(self.X_)
-		y = np.array(self.y_)
-		fold_index = np.arange(0,n_fold,1)
-		comp_range = np.arange(int(component_range[0]), int(component_range[1]+1), 1)
-		n_comps = len(comp_range)
-		cv_ve = np.zeros((n_comps))
-		cv_vex = np.zeros((n_comps))
-		cv_vey = np.zeros((n_comps))
-		cv_ve_err = np.zeros((n_comps))
-		cv_vex_err = np.zeros((n_comps))
-		cv_vey_err = np.zeros((n_comps))
-		for i, c in enumerate(comp_range):
-			cv_corr = []
-			cv_corr_x = []
-			cv_corr_y = []
-			for n in range(n_fold):
-				selx = np.ones((self.X_train_.shape[1]), dtype = bool)
-				sely = np.ones((self.y_train_.shape[1]), dtype = bool)
-				sel_train = fold_indices[n]
-				sel_test = np.concatenate(fold_indices[fold_index != n])
-				tmpX_train = X[sel_train]
-				tmpY_train = y[sel_train]
-				tmpX_test = X[sel_test]
-				tmpY_test = y[sel_test]
-				cvscca = scca_rwrapper(n_components = c, X_L1_penalty = lamdba_x, y_L1_penalty = lamdba_y, max_iter = 100).fit(tmpX_train, tmpY_train)
-				if selected_subset:
-					selx[cvscca.x_selectedvariablesindex_ == 0] = False
-					sely[cvscca.y_selectedvariablesindex_ == 0] = False
-				tmpX_test_predicted, tmpY_test_predicted = cvscca.predict(X = tmpX_test, y = tmpY_test, toself = True)
-				corr_x = cvscca._rscore(tmpX_test[:,selx], tmpX_test_predicted[:,selx])
-				corr_y = cvscca._rscore(tmpY_test[:,sely], tmpY_test_predicted[:,sely])
-				cv_corr_x.append(corr_x)
-				cv_corr_y.append(corr_y)
-				cv_corr.append((corr_x + corr_y)/2)
-			cv_ve[i] = np.mean(cv_corr)
-			cv_vex[i] = np.mean(cv_corr_x)
-			cv_vey[i] = np.mean(cv_corr_y)
-			cv_ve_err[i] = np.std(cv_corr)
-			cv_vex_err[i] = np.std(cv_corr_x)
-			cv_vey_err[i] = np.std(cv_corr_y)
-		plt.plot(comp_range, cv_ve)
-		plt.fill_between(comp_range, cv_ve-cv_ve_err, cv_ve+cv_ve_err, alpha = 0.5)
-		plt.ylabel('CV prediction score')
-		plt.xticks(comp_range,comp_range)
-		plt.xlabel('Number of Latent Variables')
-		if png_basename is not None:
-			plt.savefig("%s_cv_test_prediction_component_range.png" % (png_basename))
-			plt.close()
-		else:
-			plt.show()
-		if plotx:
-			plt.plot(comp_range, cv_vex)
-			plt.fill_between(comp_range, cv_vex-cv_vex_err, cv_vex+cv_vex_err, alpha = 0.5)
-			plt.ylabel('CV prediction score [X variates]')
-			plt.xticks(comp_range,comp_range)
-			plt.xlabel('Number of Latent Variables')
-			if png_basename is not None:
-				plt.savefig("%s_cv_test_xprediction_component_range.png" % (png_basename))
-				plt.close()
-			else:
-				plt.show()
-		if ploty:
-			plt.plot(comp_range, cv_vey)
-			plt.fill_between(comp_range, cv_vey-cv_vey_err, cv_vey+cv_vey_err, alpha = 0.5)
-			plt.ylabel('CV prediction score [Y variates]')
-			plt.xticks(comp_range,comp_range)
-			plt.xlabel('Number of Latent Variables')
-			if png_basename is not None:
-				plt.savefig("%s_cv_test_yprediction_component_range.png" % (png_basename))
-				plt.close()
-			else:
-				plt.show()
-	def plot_canonical_correlations(self, png_basename = None, component = None, swapXY = False, Xlabel = None, Ylabel = None):
-		assert hasattr(self,'model_obj_'), "Error: run fit_model"
-		score_x_train, score_y_train = self.model_obj_.transform(self.X_train_, self.y_train_)
-		score_x_test, score_y_test = self.model_obj_.transform(self.X_test_, self.y_test_)
-		if component is not None:
-			c = component -1
-			if swapXY:
-				plt.scatter(score_y_train[:,c], score_x_train[:,c])
-				b, m = np.polynomial.polynomial.polyfit(score_y_train[:,c], score_x_train[:,c],1)
-				plt.plot(score_y_train[:,c], b + m * score_y_train[:,c], '-')
-			else:
-				plt.scatter(score_x_train[:,c], score_y_train[:,c])
-				b, m = np.polynomial.polynomial.polyfit(score_x_train[:,c], score_y_train[:,c],1)
-				plt.plot(score_x_train[:,c], b + m * score_x_train[:,c], '-')
-			if Xlabel is not None:
-				plt.xlabel(Xlabel)
-			if Ylabel is not None:
-				plt.ylabel(Xlabel)
-			plt.title("Canonical variate %d" % (c+1))
-			if png_basename is not None:
-				plt.savefig("%s_canonical_corr_train_component%d.png" % (png_basename, component))
-				plt.close()
-			else:
-				plt.show()
-			if swapXY:
-				plt.scatter(score_y_test[:,c], score_x_test[:,c])
-				b, m = np.polynomial.polynomial.polyfit(score_y_test[:,c], score_x_test[:,c],1)
-				plt.plot(score_y_test[:,c], b + m * score_y_test[:,c], '-')
-			else:
-				plt.scatter(score_x_test[:,c], score_y_test[:,c])
-				b, m = np.polynomial.polynomial.polyfit(score_x_test[:,c], score_y_test[:,c],1)
-				plt.plot(score_x_test[:,c], b + m * score_x_test[:,c], '-')
-			if Xlabel is not None:
-				plt.xlabel(Xlabel)
-			if Ylabel is not None:
-				plt.ylabel(Xlabel)
-			plt.title("Canonical variate %d" % (c+1))
-			if png_basename is not None:
-				plt.savefig("%s_canonical_corr_test_component%d.png" % (png_basename, component))
-				plt.close()
-			else:
-				plt.show()
-		else:
-			for c in range(self.n_components_):
-				component = int(c+1)
-				if swapXY:
-					plt.scatter(score_y_train[:,c], score_x_train[:,c])
-					b, m = np.polynomial.polynomial.polyfit(score_y_train[:,c], score_x_train[:,c],1)
-					plt.plot(score_y_train[:,c], b + m * score_y_train[:,c], '-')
-				else:
-					plt.scatter(score_x_train[:,c], score_y_train[:,c])
-					b, m = np.polynomial.polynomial.polyfit(score_x_train[:,c], score_y_train[:,c],1)
-					plt.plot(score_x_train[:,c], b + m * score_x_train[:,c], '-')
-				if Xlabel is not None:
-					plt.xlabel(Xlabel)
-				if Ylabel is not None:
-					plt.ylabel(Xlabel)
-				plt.title("Canonical Component %d [Train]" % (c+1))
-				if png_basename is not None:
-					plt.savefig("%s_canonical_corr_train_component%d.png" % (png_basename, component))
-					plt.close()
-				else:
-					plt.show()
-				if swapXY:
-					plt.scatter(score_y_test[:,c], score_x_test[:,c])
-					b, m = np.polynomial.polynomial.polyfit(score_y_test[:,c], score_x_test[:,c],1)
-					plt.plot(score_y_test[:,c], b + m * score_y_test[:,c], '-')
-				else:
-					plt.scatter(score_x_test[:,c], score_y_test[:,c])
-					b, m = np.polynomial.polynomial.polyfit(score_x_test[:,c], score_y_test[:,c],1)
-					plt.plot(score_x_test[:,c], b + m * score_x_test[:,c], '-')
-				if Xlabel is not None:
-					plt.xlabel(Xlabel)
-				if Ylabel is not None:
-					plt.ylabel(Xlabel)
-				plt.title("Canonical Component %d [Test]" % (c+1))
-				if png_basename is not None:
-					plt.savefig("%s_canonical_corr_test_component%d.png" % (png_basename, component))
-					plt.close()
-				else:
-					plt.show()
+
 
 	def _pearsonr_to_t(self, r, N):
 		tvalues = r / np.sqrt(np.divide((1-(r*r)),(N-2)))
@@ -577,7 +422,7 @@ class parallel_scca():
 
 	def _bootstrap_loadings(self, i, seed = None):
 		"""
-		Bootstrap values for the training data's loadings with replacement. It's probably better to just use the permutation testing.
+		Base function to calculates boostrapped loading.
 		"""
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		if seed is None:
@@ -593,16 +438,49 @@ class parallel_scca():
 		byloading = self.model_obj_._calculate_loadings(byscore, self.y_[bindex])
 		return(bxloading, byloading)
 
-	def run_permute_scca(self, n_bootstrap = 10000, compute_targets = True, calulate_pvalues = True, permute_loadings = False):
+	def run_model_bootstrap_loadings(self, n_bootstrap = 10000):
 		"""
-		Bootstrap values for the training data's loadings with replacement. It's probably better to just use the permutation testing.
+		Bootstrap values for the training data's loadings with replacement. It's probably better to just use the permutation testing for signficance testing.
+		(1) Bootstrapped training index created with replacement (allows duplicates) with same length as training data
+		(2) Loadings are estimated for each bootstrap
+		(3) Bootrapped distribution can be used to create normative confidence intervals
 		"""
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		seeds = generate_seeds(self.n_permutations)
-		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(_bootstrap_loadings)(i, seed = seeds[i]) for i in range(n_bootstrap))
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._bootstrap_loadings)(i, seed = seeds[i]) for i in range(n_bootstrap))
 		bxloading, byloading = zip(*output)
-		self.boostrapped_X_loadings = np.array(bxloading)
-		self.boostrapped_Y_loadings = np.array(byloading)
+		self.model_boostrapping_loadings_X_train_ = np.array(bxloading)
+		self.model_boostrapping_loadings_Y_train = np.array(byloading)
+
+	def _permute_loadings(i, xtrain, ytrain, seed = None):
+		"""
+		Base function to calculates permuted loading.
+		"""
+				assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		if seed is None:
+			np.random.seed(np.random.randint(4294967295))
+		else:
+			np.random.seed(seed)
+		if i % 200 == 0:
+			print(i)
+		pxscore, pyscore = self.model_obj_.transform(np.random.permutation(xtrain), np.random.permutation(ytrain))
+		pxloading = self.model_obj_._calculate_loadings(pxscore, xtrain)
+		pyloading = self.model_obj_._calculate_loadings(pyscore, ytrain)
+		return(pxloading, pyloading)
+
+	def run_model_permute_loadings(self, seed = None):
+		"""
+		Created permuted distributions for the data views from the training model. This can be used to calculate family-wise error rate corrections.
+		(1) Scores are estimated using the training model using permuted training data.
+		(2) Loadings estimated by correlating the permuted score and the training data.
+		(3) Null distribution per component can be used to calculate permuted p-values and family-wise error rate corrected p-values. 
+		e.g., pcrit = np.sort(np.max(pxloading[:,componenent,:],1))[int(Nperm*0.95)]
+		Note, the correlations are already z-transformed (fischer transformation). i.e., np.arctanh(loadings) = loadings
+		"""
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_loadings)(i, xtrain = self.X_[self.train_index_], ytrain = self.y_[self.train_index_], seed = seeds[i]) for i in range(self.n_permutations))
+		pxloading, pyloading = zip(*output)
+		self.model_permutations_loadings_X_train_ = np.array(pxloading)
+		self.model_permutations_loadings_X_train_ = np.array(pyloading)
 
 	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20, toself = False):
 		"""
@@ -854,8 +732,8 @@ class parallel_scca():
 		self.perm_pvalue_RDI_X_train_ = self.fwer_corrected_p(np.sum(self.perm_RDI_X_, 1), np.sum(self.RDI_X_train_components_))[0]
 		self.perm_pvalue_RDI_Y_train_ = self.fwer_corrected_p(np.sum(self.perm_RDI_Y_, 1), np.sum(self.RDI_Y_train_components_))[0]
 		self.perm_pvalue_RDI_model_ = self.fwer_corrected_p(np.divide(np.sum(self.perm_RDI_X_, 1) + np.sum(self.perm_RDI_Y_, 1),2), np.divide(np.sum(self.RDI_X_train_components_) + np.sum(self.RDI_Y_train_components_),2))[0]
+		self.perm_pvalue_canonicalcorrelation_ = self.fwer_corrected_p(self.perm_canonicalcorrelation_, np.abs(self.canonicalcorrelation_test_), apply_fwer_correction = False)
 
-		self.perm_pvalue_canonicalcorrelation_ = self.fwer_corrected_p(self.perm_canonicalcorrelation_, self.canonicalcorrelation_test_, apply_fwer_correction = False)
 	def plot_permuted_canonical_correlations(self, png_basename = None, n_jitters = 1000, add_Q2_from_train = False, plot_model = False):
 		assert hasattr(self,'perm_pvalue_R2_test_'), "Error: Run compute_permuted_pvalues"
 		if n_jitters > self.n_permutations:
@@ -934,6 +812,165 @@ class parallel_scca():
 		else:
 			plt.show()
 
+	def plot_component_range(self, lamdba_x, lamdba_y, component_range = [1, 16], plotx = True, ploty = True, selected_subset = False, png_basename = None):
+		fold_indices = self.fold_indices_
+		n_fold = len(fold_indices)
+		X = np.array(self.X_)
+		y = np.array(self.y_)
+		fold_index = np.arange(0,n_fold,1)
+		comp_range = np.arange(int(component_range[0]), int(component_range[1]+1), 1)
+		n_comps = len(comp_range)
+		cv_ve = np.zeros((n_comps))
+		cv_vex = np.zeros((n_comps))
+		cv_vey = np.zeros((n_comps))
+		cv_ve_err = np.zeros((n_comps))
+		cv_vex_err = np.zeros((n_comps))
+		cv_vey_err = np.zeros((n_comps))
+		for i, c in enumerate(comp_range):
+			cv_corr = []
+			cv_corr_x = []
+			cv_corr_y = []
+			for n in range(n_fold):
+				selx = np.ones((self.X_train_.shape[1]), dtype = bool)
+				sely = np.ones((self.y_train_.shape[1]), dtype = bool)
+				sel_train = fold_indices[n]
+				sel_test = np.concatenate(fold_indices[fold_index != n])
+				tmpX_train = X[sel_train]
+				tmpY_train = y[sel_train]
+				tmpX_test = X[sel_test]
+				tmpY_test = y[sel_test]
+				cvscca = scca_rwrapper(n_components = c, X_L1_penalty = lamdba_x, y_L1_penalty = lamdba_y, max_iter = 100).fit(tmpX_train, tmpY_train)
+				if selected_subset:
+					selx[cvscca.x_selectedvariablesindex_ == 0] = False
+					sely[cvscca.y_selectedvariablesindex_ == 0] = False
+				tmpX_test_predicted, tmpY_test_predicted = cvscca.predict(X = tmpX_test, y = tmpY_test, toself = True)
+				corr_x = cvscca._rscore(tmpX_test[:,selx], tmpX_test_predicted[:,selx])
+				corr_y = cvscca._rscore(tmpY_test[:,sely], tmpY_test_predicted[:,sely])
+				cv_corr_x.append(corr_x)
+				cv_corr_y.append(corr_y)
+				cv_corr.append((corr_x + corr_y)/2)
+			cv_ve[i] = np.mean(cv_corr)
+			cv_vex[i] = np.mean(cv_corr_x)
+			cv_vey[i] = np.mean(cv_corr_y)
+			cv_ve_err[i] = np.std(cv_corr)
+			cv_vex_err[i] = np.std(cv_corr_x)
+			cv_vey_err[i] = np.std(cv_corr_y)
+		plt.plot(comp_range, cv_ve)
+		plt.fill_between(comp_range, cv_ve-cv_ve_err, cv_ve+cv_ve_err, alpha = 0.5)
+		plt.ylabel('CV prediction score')
+		plt.xticks(comp_range,comp_range)
+		plt.xlabel('Number of Latent Variables')
+		if png_basename is not None:
+			plt.savefig("%s_cv_test_prediction_component_range.png" % (png_basename))
+			plt.close()
+		else:
+			plt.show()
+		if plotx:
+			plt.plot(comp_range, cv_vex)
+			plt.fill_between(comp_range, cv_vex-cv_vex_err, cv_vex+cv_vex_err, alpha = 0.5)
+			plt.ylabel('CV prediction score [X variates]')
+			plt.xticks(comp_range,comp_range)
+			plt.xlabel('Number of Latent Variables')
+			if png_basename is not None:
+				plt.savefig("%s_cv_test_xprediction_component_range.png" % (png_basename))
+				plt.close()
+			else:
+				plt.show()
+		if ploty:
+			plt.plot(comp_range, cv_vey)
+			plt.fill_between(comp_range, cv_vey-cv_vey_err, cv_vey+cv_vey_err, alpha = 0.5)
+			plt.ylabel('CV prediction score [Y variates]')
+			plt.xticks(comp_range,comp_range)
+			plt.xlabel('Number of Latent Variables')
+			if png_basename is not None:
+				plt.savefig("%s_cv_test_yprediction_component_range.png" % (png_basename))
+				plt.close()
+			else:
+				plt.show()
+
+	def plot_canonical_correlations(self, png_basename = None, component = None, swapXY = False, Xlabel = None, Ylabel = None):
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		score_x_train, score_y_train = self.model_obj_.transform(self.X_train_, self.y_train_)
+		score_x_test, score_y_test = self.model_obj_.transform(self.X_test_, self.y_test_)
+		if component is not None:
+			c = component -1
+			if swapXY:
+				plt.scatter(score_y_train[:,c], score_x_train[:,c])
+				b, m = np.polynomial.polynomial.polyfit(score_y_train[:,c], score_x_train[:,c],1)
+				plt.plot(score_y_train[:,c], b + m * score_y_train[:,c], '-')
+			else:
+				plt.scatter(score_x_train[:,c], score_y_train[:,c])
+				b, m = np.polynomial.polynomial.polyfit(score_x_train[:,c], score_y_train[:,c],1)
+				plt.plot(score_x_train[:,c], b + m * score_x_train[:,c], '-')
+			if Xlabel is not None:
+				plt.xlabel(Xlabel)
+			if Ylabel is not None:
+				plt.ylabel(Xlabel)
+			plt.title("Canonical variate %d" % (c+1))
+			if png_basename is not None:
+				plt.savefig("%s_canonical_corr_train_component%d.png" % (png_basename, component))
+				plt.close()
+			else:
+				plt.show()
+			if swapXY:
+				plt.scatter(score_y_test[:,c], score_x_test[:,c])
+				b, m = np.polynomial.polynomial.polyfit(score_y_test[:,c], score_x_test[:,c],1)
+				plt.plot(score_y_test[:,c], b + m * score_y_test[:,c], '-')
+			else:
+				plt.scatter(score_x_test[:,c], score_y_test[:,c])
+				b, m = np.polynomial.polynomial.polyfit(score_x_test[:,c], score_y_test[:,c],1)
+				plt.plot(score_x_test[:,c], b + m * score_x_test[:,c], '-')
+			if Xlabel is not None:
+				plt.xlabel(Xlabel)
+			if Ylabel is not None:
+				plt.ylabel(Xlabel)
+			plt.title("Canonical variate %d" % (c+1))
+			if png_basename is not None:
+				plt.savefig("%s_canonical_corr_test_component%d.png" % (png_basename, component))
+				plt.close()
+			else:
+				plt.show()
+		else:
+			for c in range(self.n_components_):
+				component = int(c+1)
+				if swapXY:
+					plt.scatter(score_y_train[:,c], score_x_train[:,c])
+					b, m = np.polynomial.polynomial.polyfit(score_y_train[:,c], score_x_train[:,c],1)
+					plt.plot(score_y_train[:,c], b + m * score_y_train[:,c], '-')
+				else:
+					plt.scatter(score_x_train[:,c], score_y_train[:,c])
+					b, m = np.polynomial.polynomial.polyfit(score_x_train[:,c], score_y_train[:,c],1)
+					plt.plot(score_x_train[:,c], b + m * score_x_train[:,c], '-')
+				if Xlabel is not None:
+					plt.xlabel(Xlabel)
+				if Ylabel is not None:
+					plt.ylabel(Xlabel)
+				plt.title("Canonical Component %d [Train]" % (c+1))
+				if png_basename is not None:
+					plt.savefig("%s_canonical_corr_train_component%d.png" % (png_basename, component))
+					plt.close()
+				else:
+					plt.show()
+				if swapXY:
+					plt.scatter(score_y_test[:,c], score_x_test[:,c])
+					b, m = np.polynomial.polynomial.polyfit(score_y_test[:,c], score_x_test[:,c],1)
+					plt.plot(score_y_test[:,c], b + m * score_y_test[:,c], '-')
+				else:
+					plt.scatter(score_x_test[:,c], score_y_test[:,c])
+					b, m = np.polynomial.polynomial.polyfit(score_x_test[:,c], score_y_test[:,c],1)
+					plt.plot(score_x_test[:,c], b + m * score_x_test[:,c], '-')
+				if Xlabel is not None:
+					plt.xlabel(Xlabel)
+				if Ylabel is not None:
+					plt.ylabel(Xlabel)
+				plt.title("Canonical Component %d [Test]" % (c+1))
+				if png_basename is not None:
+					plt.savefig("%s_canonical_corr_test_component%d.png" % (png_basename, component))
+					plt.close()
+				else:
+					plt.show()
+
+
 class scca_rwrapper:
 	"""
 	
@@ -967,6 +1004,7 @@ class scca_rwrapper:
 		self.penalty = "l1"
 		self.force_pma = force_pma
 		self.effective_zero = effective_zero
+		
 	def fit(self, X, y, calculate_loadings = True):
 		"""
 		Fit for scca model. The functions saves outputs using sklearn's naming convention.
