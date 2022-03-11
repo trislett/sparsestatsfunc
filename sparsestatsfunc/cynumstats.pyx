@@ -7,6 +7,21 @@ cimport cython
 cdef extern from "math.h":
 	double sqrt(double m)
 
+def fast_correlation(x, y):
+	x -= np.mean(x)
+	y -= np.mean(y)
+	x /= np.linalg.norm(x)
+	y /= np.linalg.norm(y)
+	return(np.dot(x, y))
+
+def column_correlation(X, Y):
+	xdim = X.shape[1]
+	ydim = Y.shape[1]
+	rarr = np.empty((xdim,ydim))
+	for px in range(xdim):
+		for py in range(ydim):
+			rarr[px, py] = fast_correlation(X[:,px], Y[:,py])
+	return(rarr)
 
 #def csquare(ndarray[np.float32_t, ndim=1] x):
 #	cdef i

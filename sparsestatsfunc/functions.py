@@ -4,7 +4,7 @@ import itertools
 import numpy as np
 import matplotlib.pyplot as plt
 
-from scipy.stats import t, f
+from scipy.stats import t, f, norm, chi2
 from scipy.linalg import pinv
 from statsmodels.stats.multitest import multipletests, fdrcorrection
 from joblib import Parallel, delayed
@@ -49,7 +49,7 @@ except:
 
 def zscaler_XY(X, y, axis=0, w_mean=True, scale_x = True, scale_y = True):
 	"""
-	Applies scaling to X and y, return means and std regardless
+	Applies scaling to X and y, return means and std in all cases.
 	"""
 	X_ = np.zeros_like(X)
 	X_[:] = np.copy(X)
@@ -228,6 +228,7 @@ class parallel_scca():
 		self.X_test_ = X_test
 		self.y_test_ = y_test
 
+
 	def _scca_params_cvgridsearch(self, X, y, n_components, l1x_pen, l1y_pen, group, train_index, fold_indices, n_reshuffle = 1, max_iter = 20, verbose = True, optimize_x = False, optimize_y = False, optimize_primary_component = False, optimize_global_redundancy_index = False, optimize_selected_variables = True, seed = None):
 		"""
 		return CV 
@@ -294,8 +295,9 @@ class parallel_scca():
 			if optimize_primary_component:
 				print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, CC1 = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, Q2_mean, Q2_std))
 			else:
-				print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, Q2 = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, Q2_mean, Q2_std))
+				print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, mean global correlation = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, Q2_mean, Q2_std))
 		return(Q2_mean, Q2_std)
+
 	def nfold_cv_params_search_scca(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), n_reshuffle = 1, max_iter = 20, optimize_x = False, optimize_y = False, optimize_primary_component = False, optimize_global_redundancy_index = False, optimize_selected_variables = True, max_n_comp = None, debug = False):
 		if optimize_primary_component:
 			max_n_comp = 1
@@ -356,21 +358,97 @@ class parallel_scca():
 			print("Q-squared was never above zero")
 		if debug:
 			self.output = output
-		self.Q2_GRIDSEARCH_ = np.array(Q2_GRIDSEARCH)
-		self.Q2_GRIDSEARCH_SD_ = np.array(Q2_GRIDSEARCH_SD)
+		self.STAT_GRIDSEARCH_ = np.array(Q2_GRIDSEARCH)
+		self.STAT_GRIDSEARCH_SD_ = np.array(Q2_GRIDSEARCH_SD)
 		self.GRIDSEARCH_BEST_COMPONENT_ = best_component
 		self.GRIDSEARCH_L1X_PENALTY_ = best_l1_x
 		self.GRIDSEARCH_L1Y_PENALTY_ = best_l1_y
 		self.l1x_gridsearch_range_ = l1x_range
 		self.l1y_gridsearch_range_ = l1y_range
 		self.gridsearch_maxncomp_ = max_n_comp
+
+	def _scca_canonical_corr_cvgridsearch(self, l1x_pen, l1y_pen, n_components, max_iter = 20, verbose = True):
+		n_fold = self.n_fold_
+		fold_index = np.arange(0,self.n_fold_,1)
+		fold_indices = self.fold_indices_
+		X = self.X_
+		y = self.y_
+		tempz = np.zeros((n_fold))
+		for n in range(n_fold):
+			sel_train = fold_indices[n]
+			sel_test = np.concatenate(fold_indices[fold_index != n])
+			tmpX_train = X[sel_train]
+			tmpY_train = y[sel_train]
+			tmpX_test = X[sel_test]
+			tmpY_test = y[sel_test]
+			cvscca = scca_rwrapper(n_components = n_components,
+											X_L1_penalty = l1x_pen,
+											y_L1_penalty = l1y_pen,
+											max_iter = max_iter).fit(tmpX_train, tmpY_train, calculate_loadings = False)
+			# fisher z-transformation of correlations
+			fisherz_cancor = np.arctanh(cvscca.canonicalcorr(tmpX_test, tmpY_test))
+			# calculate p-values for test data
+			pval = self._pearsonr_to_t(abs(fisherz_cancor), len(tmpX_test))[1]
+			# fisher's method to calculate chi2
+			chi2_stat = -2*np.sum(np.log10(pval))
+			# convert to z-values
+			tempz[n] = norm.ppf(chi2.sf(chi2_stat,n_components))*-1
+		mean_z = np.mean(tempz)
+		std_z = np.std(tempz)
+		if verbose:
+			print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, Average Z = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, mean_z, std_z))
+		return(mean_z, std_z)
+
+	def nfold_cv_canonical_corr_gridsearch(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), max_iter = 20, max_n_comp = None, debug = False):
+		if max_n_comp is None:
+			# auto select max number of components of smallest feature
+			n_samples = self.X_test_.shape[0]
+			n_features = self.X_test_.shape[1]
+			n_targets = self.y_test_.shape[1]
+			max_n_comp = int(min(n_samples, n_features, n_targets))
+			print("Search for up to %d components (Sqrt of min(n_samples, n_features, n_targets)" % (max_n_comp))
+		component_range = np.arange(1,(max_n_comp+1),1)
+		search_i_size = len(component_range)
+		search_j_size = len(l1x_range)
+		search_k_size = len(l1y_range)
+		meanZ_GRIDSEARCH = np.zeros((search_i_size, search_j_size, search_k_size))
+		meanZ_GRIDSEARCH_SD = np.zeros((search_i_size, search_j_size, search_k_size))
+		n_seeds  = len(list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
+		output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self._scca_canonical_corr_cvgridsearch)(l1x_pen = l1x_range[j],
+																																	l1y_pen = l1y_range[k],
+																																	n_components = component_range[i],
+																																	max_iter = max_iter) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
+		output_mean, output_sd = zip(*output)
+		count = 0
+		best_component = 0
+		best_l1_x = 0
+		best_l1_y = 0
+		highest = 0
+		for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))):
+			meanZ_GRIDSEARCH[i,j,k] = output_mean[count]
+			meanZ_GRIDSEARCH_SD[i,j,k] = output_sd[count]
+			if output_mean[count] > highest:
+				highest = output_mean[count]
+				best_component = component_range[i]
+				best_l1_x = l1x_range[j]
+				best_l1_y = l1y_range[k]
+				print("Current best prediction zscore = %1.3f [Components = %d, l1[x] penalty = %1.2f, and l1[y] penalty = %1.2f]" % (highest, best_component, best_l1_x, best_l1_y))
+			count+=1
+		if highest == 0:
+			print("Z-score was never above zero (should not occur...)")
+		self.STAT_GRIDSEARCH_ = np.array(meanZ_GRIDSEARCH)
+		self.STAT_GRIDSEARCH_SD_ = np.array(meanZ_GRIDSEARCH_SD)
+		self.l1x_gridsearch_range_ = l1x_range
+		self.l1y_gridsearch_range_ = l1y_range
+		self.gridsearch_maxncomp_ = max_n_comp
+
 	def plot_gridsearch(self, png_basename = None, component = None, nan_unstable = False, cmap = 'jet'):
 		l1x_range = self.l1x_gridsearch_range_
 		l1y_range = self.l1y_gridsearch_range_
 		if component is not None:
-			vmax = np.max(self.Q2_GRIDSEARCH_)
+			vmax = np.max(self.STAT_GRIDSEARCH_)
 			vmin = 0
-			Q2_SEARCH = np.array(self.Q2_GRIDSEARCH_[component-1]).T
+			Q2_SEARCH = np.array(self.STAT_GRIDSEARCH_[component-1]).T
 			if nan_unstable:
 				Q2_SEARCH[Q2_SEARCH < 0] = np.nan
 			else:
@@ -381,20 +459,20 @@ class parallel_scca():
 			plt.yticks(range(len(l1y_range)),[s[:3] for s in l1y_range.astype(str)])
 			plt.ylabel('L1(Y) Penalty')
 			plt.colorbar()
-			plt.title("Q-Squared [CV] Component %d" % component)
+			plt.title("Mean CV Statistic: Component %d" % component)
 			plt.gca().invert_yaxis()
 			plt.tight_layout(pad=0.5, w_pad=0, h_pad=0)
 			if png_basename is not None:
-				plt.savefig("%s_gridsearch_Q2_component%d.png" % (png_basename, component))
+				plt.savefig("%s_gridsearch_stat_component%d.png" % (png_basename, component))
 				plt.close()
 			else:
 				plt.show()
 		else:
 			for c in range(self.gridsearch_maxncomp_):
 				component = int(c+1)
-				vmax = np.max(self.Q2_GRIDSEARCH_)
+				vmax = np.max(self.STAT_GRIDSEARCH_)
 				vmin = 0
-				Q2_SEARCH = np.array(self.Q2_GRIDSEARCH_[c]).T
+				Q2_SEARCH = np.array(self.STAT_GRIDSEARCH_[c]).T
 				if nan_unstable:
 					Q2_SEARCH[Q2_SEARCH < 0] = np.nan
 				else:
@@ -409,7 +487,7 @@ class parallel_scca():
 				plt.gca().invert_yaxis()
 				plt.tight_layout(pad=0.5, w_pad=0, h_pad=0)
 				if png_basename is not None:
-					plt.savefig("%s_gridsearch_Q2_component%d.png" % (png_basename, component))
+					plt.savefig("%s_gridsearch_stat_component%d.png" % (png_basename, component))
 					plt.close()
 				else:
 					plt.show()
@@ -446,13 +524,13 @@ class parallel_scca():
 		(3) Bootrapped distribution can be used to create normative confidence intervals
 		"""
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
-		seeds = generate_seeds(self.n_permutations)
+		seeds = generate_seeds(n_bootstrap)
 		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._bootstrap_loadings)(i, seed = seeds[i]) for i in range(n_bootstrap))
 		bxloading, byloading = zip(*output)
 		self.model_boostrapping_loadings_X_train_ = np.array(bxloading)
 		self.model_boostrapping_loadings_Y_train = np.array(byloading)
 
-	def _permute_loadings(i, xtrain, ytrain, seed = None):
+	def _permute_loadings(self, i, permute_test_data = False, seed = None):
 		"""
 		Base function to calculates permuted loading.
 		"""
@@ -463,12 +541,16 @@ class parallel_scca():
 			np.random.seed(seed)
 		if i % 200 == 0:
 			print(i)
-		pxscore, pyscore = self.model_obj_.transform(np.random.permutation(xtrain), np.random.permutation(ytrain))
-		pxloading = self.model_obj_._calculate_loadings(pxscore, xtrain)
-		pyloading = self.model_obj_._calculate_loadings(pyscore, ytrain)
+		if permute_test_data:
+			data_index = self.test_index_
+		else:
+			data_index = self.train_index_
+		pxscore, pyscore = self.model_obj_.transform(np.random.permutation(self.X_[data_index]), np.random.permutation(self.y_[data_index]))
+		pxloading = self.model_obj_._calculate_loadings(pxscore, self.X_[data_index])
+		pyloading = self.model_obj_._calculate_loadings(pyscore, self.y_[data_index])
 		return(pxloading, pyloading)
 
-	def run_model_permute_loadings(self, seed = None):
+	def run_model_permute_loadings(self):
 		"""
 		Created permuted distributions for the data views from the training model. This can be used to calculate family-wise error rate corrections.
 		(1) Scores are estimated using the training model using permuted training data.
@@ -477,7 +559,8 @@ class parallel_scca():
 		e.g., pcrit = np.sort(np.max(pxloading[:,componenent,:],1))[int(Nperm*0.95)]
 		Note, the correlations are already z-transformed (fischer transformation). i.e., np.arctanh(loadings) = loadings
 		"""
-		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_loadings)(i, xtrain = self.X_[self.train_index_], ytrain = self.y_[self.train_index_], seed = seeds[i]) for i in range(self.n_permutations))
+		seeds = generate_seeds(self.n_permutations)
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_loadings)(i, seed = seeds[i]) for i in range(self.n_permutations))
 		pxloading, pyloading = zip(*output)
 		self.model_permutations_loadings_X_train_ = np.array(pxloading)
 		self.model_permutations_loadings_X_train_ = np.array(pyloading)
@@ -612,7 +695,7 @@ class parallel_scca():
 		self.model_obj_ = scca
 		self.toself_ = toself
 
-	def _permute_function_scca(self, p, compute_targets = True, mask_sparsity = True, permute_loadings = False, seed = None):
+	def _permute_function_scca(self, p, compute_targets = True, permute_loadings = False, seed = None):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		
 		if seed is None:
@@ -1108,7 +1191,7 @@ class scca_rwrapper:
 		n_targets = data.shape[1]
 		loadings = np.zeros((n_components, n_targets))
 		for c in range(n_components):
-			loadings[c,:] = cy_lin_lstsqr_mat(scale(data_scores[:,c].reshape(-1,1)), data)[0]
+			loadings[c,:] = cy_lin_lstsqr_mat(data_scores[:,c].reshape(-1,1), data)[0]
 		return(loadings)
 
 	def transform(self, X = None, y = None):
@@ -2902,8 +2985,8 @@ class bootstraper_parallel():
 #					Q2_grid_arr_sd[c,s] = 1.
 #					RMSE_grid_arr[c,s] =  0.
 #					RMSE_grid_arr_sd[c,s] = 1.
-#		self.Q2_GRIDSEARCH_ = Q2_grid_arr
-#		self.Q2_GRIDSEARCH_SD_ = Q2_grid_arr_sd
+#		self.STAT_GRIDSEARCH_ = Q2_grid_arr
+#		self.STAT_GRIDSEARCH_SD_ = Q2_grid_arr_sd
 #		self.RMSEP_CV_GRIDSEARCH_ = RMSE_grid_arr
 #		self.RMSEP_CV_GRIDSEARCH_SD_ = RMSE_grid_arr_sd
 #		self.mean_selected_X = np.array(X_mean_selected)
