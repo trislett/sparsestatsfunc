@@ -392,7 +392,7 @@ class parallel_scca():
 			# fisher's method to calculate chi2
 			chi2_stat = -2*np.sum(np.log10(pval))
 			# convert to z-values
-			tempz[n] = norm.ppf(chi2.sf(chi2_stat,n_components))*-1
+			tempz[n] = norm.ppf(chi2.sf(chi2_stat,n_components*2))*-1
 		mean_z = np.mean(tempz)
 		std_z = np.std(tempz)
 		if verbose:
