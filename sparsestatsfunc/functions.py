@@ -367,7 +367,7 @@ class parallel_scca():
 		self.l1y_gridsearch_range_ = l1y_range
 		self.gridsearch_maxncomp_ = max_n_comp
 
-	def _scca_canonical_corr_cvgridsearch(self, l1x_pen, l1y_pen, n_components, max_iter = 20, verbose = True):
+	def _scca_canonical_corr_cvgridsearch(self, l1x_pen, l1y_pen, n_components, max_iter = 20, verbose = True, maxcc = False):
 		n_fold = self.n_fold_
 		fold_index = np.arange(0,self.n_fold_,1)
 		fold_indices = self.fold_indices_
@@ -393,13 +393,19 @@ class parallel_scca():
 			chi2_stat = -2*np.sum(np.log10(pval))
 			# convert to z-values
 			tempz[n] = norm.ppf(chi2.sf(chi2_stat,n_components*2))*-1
-		mean_z = np.mean(tempz)
-		std_z = np.std(tempz)
-		if verbose:
-			print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, Average Z = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, mean_z, std_z))
-		return(mean_z, std_z)
+		if maxcc:
+			outstat = np.max(tempz)
+			outstd = np.std(tempz)
+			if verbose:
+				print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, Best Z = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, outstat, outstd))
+		else:
+			outstat = np.mean(tempz)
+			outstd = np.std(tempz)
+			if verbose:
+				print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, Average Z = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, outstat, outstd))
+		return(outstat, outstd)
 
-	def nfold_cv_canonical_corr_gridsearch(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), max_iter = 20, max_n_comp = None, debug = False):
+	def nfold_cv_canonical_corr_gridsearch(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), max_iter = 20, max_n_comp = None, debug = False, maxcc = False):
 		if max_n_comp is None:
 			# auto select max number of components of smallest feature
 			n_samples = self.X_test_.shape[0]
@@ -417,7 +423,8 @@ class parallel_scca():
 		output = Parallel(n_jobs=self.n_jobs, backend='multiprocessing')(delayed(self._scca_canonical_corr_cvgridsearch)(l1x_pen = l1x_range[j],
 																																	l1y_pen = l1y_range[k],
 																																	n_components = component_range[i],
-																																	max_iter = max_iter) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
+																																	max_iter = max_iter,
+																																	maxcc = maxcc) for i, j, k in list(itertools.product(range(search_i_size), range(search_j_size), range(search_k_size))))
 		output_mean, output_sd = zip(*output)
 		count = 0
 		best_component = 0
@@ -432,7 +439,7 @@ class parallel_scca():
 				best_component = component_range[i]
 				best_l1_x = l1x_range[j]
 				best_l1_y = l1y_range[k]
-				print("Current best prediction zscore = %1.3f [Components = %d, l1[x] penalty = %1.2f, and l1[y] penalty = %1.2f]" % (highest, best_component, best_l1_x, best_l1_y))
+				print("Current best prediction stat = %1.3f [Components = %d, l1[x] penalty = %1.2f, and l1[y] penalty = %1.2f]" % (highest, best_component, best_l1_x, best_l1_y))
 			count+=1
 		if highest == 0:
 			print("Z-score was never above zero (should not occur...)")
