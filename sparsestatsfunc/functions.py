@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import itertools
+import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -71,6 +72,13 @@ def zscaler_XY(X, y, axis=0, w_mean=True, scale_x = True, scale_y = True):
 def generate_seeds(n_seeds, maxint = int(2**32 - 1)):
 	return([np.random.randint(0, maxint) for i in range(n_seeds)])
 
+def pickle_save_model(model, filename):
+	pickle.dump(model, open(filename, 'wb'))
+
+def pickle_load_model(filename):
+	with open(filename, 'rb') as pfile:
+		model = pickle.load(pfile)
+	return(model)
 
 class parallel_scca():
 
@@ -373,7 +381,7 @@ class parallel_scca():
 		fold_indices = self.fold_indices_
 		X = self.X_
 		y = self.y_
-		tempz = np.zeros((n_fold))
+		tempq = np.zeros((n_fold, n_components))
 		for n in range(n_fold):
 			sel_train = fold_indices[n]
 			sel_test = np.concatenate(fold_indices[fold_index != n])
@@ -387,22 +395,19 @@ class parallel_scca():
 											max_iter = max_iter).fit(tmpX_train, tmpY_train, calculate_loadings = False)
 			# fisher z-transformation of correlations
 			fisherz_cancor = np.arctanh(cvscca.canonicalcorr(tmpX_test, tmpY_test))
-			# calculate p-values for test data
-			pval = self._pearsonr_to_t(abs(fisherz_cancor), len(tmpX_test))[1]
-			# fisher's method to calculate chi2
-			chi2_stat = -2*np.sum(np.log10(pval))
-			# convert to z-values
-			tempz[n] = norm.ppf(chi2.sf(chi2_stat,n_components*2))*-1
+			tempq[n] = fisherz_cancor
 		if maxcc:
-			outstat = np.max(tempz)
-			outstd = np.std(tempz)
+			rho_mean = np.mean(tempq,0)
+			maxarg = np.argmax(rho_mean)
+			outstat = np.max(np.mean(tempq,0))
+			outstd = np.std(tempq[:, maxarg])
 			if verbose:
-				print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, Best Z = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, outstat, outstd))
+				print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, Best r_cv = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, outstat, outstd))
 		else:
-			outstat = np.mean(tempz)
-			outstd = np.std(tempz)
+			outstat = np.mean(np.mean(tempq,0))
+			outstd = np.mean(np.std(tempq,0))
 			if verbose:
-				print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, Average Z = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, outstat, outstd))
+				print("FINISHED: Comp %d, l1x = %1.3f, l1y = %1.3f, mean r_cv = %1.3f +/- %1.3f" % (n_components, l1x_pen, l1y_pen, outstat, outstd))
 		return(outstat, outstd)
 
 	def nfold_cv_canonical_corr_gridsearch(self, l1x_range = np.arange(0.1,1.1,.1), l1y_range = np.arange(0.1,1.1,.1), max_iter = 20, max_n_comp = None, debug = False, maxcc = False):
@@ -978,87 +983,114 @@ class parallel_scca():
 			else:
 				plt.show()
 
-	def plot_canonical_correlations(self, png_basename = None, component = None, swapXY = False, Xlabel = None, Ylabel = None):
+	def plot_canonical_correlations(self, png_basename = None, component = None, swapXY = False, Xlabel = None, Ylabel = None, catvariable = None, catvariablename = None, catlegend = None):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
-		score_x_train, score_y_train = self.model_obj_.transform(self.X_train_, self.y_train_)
-		score_x_test, score_y_test = self.model_obj_.transform(self.X_test_, self.y_test_)
+		if catvariable is None:
+			ncat = 1
+			catvariable = np.ones((len(self.X_)))
+			ucatvariable = np.unique(catvariable)
+			catvariablename = ""
+		else:
+			catvariable = np.array(catvariable)
+			if catvariablename is None:
+				catvariablename = "var" + "_"
+			else:
+				catvariablename = catvariablename + "_"
+			assert len(catvariable) == len(self.X_), "Error: categorical variable (%s) length is not the same as data length"
+			ucatvariable = np.unique(catvariable)
+		traincat = catvariable[self.train_index_]
+		testcat = catvariable[self.test_index_]
+		if swapXY:
+			score_y_train, score_x_train = self.model_obj_.transform(self.X_train_, self.y_train_)
+			score_y_test, score_x_test = self.model_obj_.transform(self.X_test_, self.y_test_)
+		else:
+			score_x_train, score_y_train = self.model_obj_.transform(self.X_train_, self.y_train_)
+			score_x_test, score_y_test = self.model_obj_.transform(self.X_test_, self.y_test_)
 		if component is not None:
 			c = component -1
-			if swapXY:
-				plt.scatter(score_y_train[:,c], score_x_train[:,c])
-				b, m = np.polynomial.polynomial.polyfit(score_y_train[:,c], score_x_train[:,c],1)
-				plt.plot(score_y_train[:,c], b + m * score_y_train[:,c], '-')
-			else:
-				plt.scatter(score_x_train[:,c], score_y_train[:,c])
-				b, m = np.polynomial.polynomial.polyfit(score_x_train[:,c], score_y_train[:,c],1)
-				plt.plot(score_x_train[:,c], b + m * score_x_train[:,c], '-')
-			if Xlabel is not None:
-				plt.xlabel(Xlabel)
-			if Ylabel is not None:
-				plt.ylabel(Xlabel)
-			plt.title("Canonical variate %d" % (c+1))
-			if png_basename is not None:
-				plt.savefig("%s_canonical_corr_train_component%d.png" % (png_basename, component))
-				plt.close()
-			else:
-				plt.show()
-			if swapXY:
-				plt.scatter(score_y_test[:,c], score_x_test[:,c])
-				b, m = np.polynomial.polynomial.polyfit(score_y_test[:,c], score_x_test[:,c],1)
-				plt.plot(score_y_test[:,c], b + m * score_y_test[:,c], '-')
-			else:
-				plt.scatter(score_x_test[:,c], score_y_test[:,c])
-				b, m = np.polynomial.polynomial.polyfit(score_x_test[:,c], score_y_test[:,c],1)
-				plt.plot(score_x_test[:,c], b + m * score_x_test[:,c], '-')
-			if Xlabel is not None:
-				plt.xlabel(Xlabel)
-			if Ylabel is not None:
-				plt.ylabel(Xlabel)
-			plt.title("Canonical variate %d" % (c+1))
-			if png_basename is not None:
-				plt.savefig("%s_canonical_corr_test_component%d.png" % (png_basename, component))
-				plt.close()
-			else:
-				plt.show()
+			for v, cat in enumerate(ucatvariable):
+				if catlegend is not None:
+					plt.scatter(score_x_train[traincat==cat,c], score_y_train[traincat==cat,c], label = catlegend[v])
+				else:
+					plt.scatter(score_x_train[traincat==cat,c], score_y_train[traincat==cat,c])
+				b, m = np.polynomial.polynomial.polyfit(score_x_train[traincat==cat,c], score_y_train[traincat==cat,c],1)
+				plt.plot(score_x_train[traincat==cat,c], b + m * score_x_train[traincat==cat,c], '-')
+				if Xlabel is not None:
+					plt.xlabel(Xlabel)
+				if Ylabel is not None:
+					plt.ylabel(Xlabel)
+				if cat == ucatvariable[-1]:
+					plt.title("Canonical variate %d" % (c+1))
+					if catlegend is not None:
+						plt.legend()
+					if png_basename is not None:
+						plt.savefig("%s%s_canonical_corr_train_component%d.png" % (catvariablename, png_basename, component))
+						plt.close()
+					else:
+						plt.show()
+			for v, cat in enumerate(ucatvariable):
+				if catlegend is not None:
+					plt.scatter(score_x_test[testcat==cat,c], score_y_test[testcat==cat,c], label = catlegend[v])
+				else:
+					plt.scatter(score_x_test[testcat==cat,c], score_y_test[testcat==cat,c])
+				b, m = np.polynomial.polynomial.polyfit(score_x_test[testcat==cat,c], score_y_test[testcat==cat,c],1)
+				plt.plot(score_x_test[testcat==cat,c], b + m * score_x_test[testcat==cat,c], '-', label = catlegend[v])
+				if Xlabel is not None:
+					plt.xlabel(Xlabel)
+				if Ylabel is not None:
+					plt.ylabel(Xlabel)
+				if cat == ucatvariable[-1]:
+					plt.title("Canonical variate %d" % (c+1))
+					if catlegend is not None:
+						plt.legend()
+					if png_basename is not None:
+						plt.savefig("%s%s_canonical_corr_test_component%d.png" % (catvariablename, png_basename, component))
+						plt.close()
+					else:
+						plt.show()
 		else:
 			for c in range(self.n_components_):
 				component = int(c+1)
-				if swapXY:
-					plt.scatter(score_y_train[:,c], score_x_train[:,c])
-					b, m = np.polynomial.polynomial.polyfit(score_y_train[:,c], score_x_train[:,c],1)
-					plt.plot(score_y_train[:,c], b + m * score_y_train[:,c], '-')
-				else:
-					plt.scatter(score_x_train[:,c], score_y_train[:,c])
-					b, m = np.polynomial.polynomial.polyfit(score_x_train[:,c], score_y_train[:,c],1)
-					plt.plot(score_x_train[:,c], b + m * score_x_train[:,c], '-')
-				if Xlabel is not None:
-					plt.xlabel(Xlabel)
-				if Ylabel is not None:
-					plt.ylabel(Xlabel)
-				plt.title("Canonical Component %d [Train]" % (c+1))
-				if png_basename is not None:
-					plt.savefig("%s_canonical_corr_train_component%d.png" % (png_basename, component))
-					plt.close()
-				else:
-					plt.show()
-				if swapXY:
-					plt.scatter(score_y_test[:,c], score_x_test[:,c])
-					b, m = np.polynomial.polynomial.polyfit(score_y_test[:,c], score_x_test[:,c],1)
-					plt.plot(score_y_test[:,c], b + m * score_y_test[:,c], '-')
-				else:
-					plt.scatter(score_x_test[:,c], score_y_test[:,c])
-					b, m = np.polynomial.polynomial.polyfit(score_x_test[:,c], score_y_test[:,c],1)
-					plt.plot(score_x_test[:,c], b + m * score_x_test[:,c], '-')
-				if Xlabel is not None:
-					plt.xlabel(Xlabel)
-				if Ylabel is not None:
-					plt.ylabel(Xlabel)
-				plt.title("Canonical Component %d [Test]" % (c+1))
-				if png_basename is not None:
-					plt.savefig("%s_canonical_corr_test_component%d.png" % (png_basename, component))
-					plt.close()
-				else:
-					plt.show()
+				for v, cat in enumerate(ucatvariable):
+					if catlegend is not None:
+						plt.scatter(score_x_train[traincat==cat,c], score_y_train[traincat==cat,c], label = catlegend[v])
+					else:
+						plt.scatter(score_x_train[traincat==cat,c], score_y_train[traincat==cat,c])
+					b, m = np.polynomial.polynomial.polyfit(score_x_train[traincat==cat,c], score_y_train[traincat==cat,c],1)
+					plt.plot(score_x_train[traincat==cat,c], b + m * score_x_train[traincat==cat,c], '-')
+					if Xlabel is not None:
+						plt.xlabel(Xlabel)
+					if Ylabel is not None:
+						plt.ylabel(Xlabel)
+					if cat == ucatvariable[-1]:
+						plt.title("Canonical Component %d [Train]" % (c+1))
+						if catlegend is not None:
+							plt.legend()
+						if png_basename is not None:
+							plt.savefig("%s%s_canonical_corr_train_component%d.png" % (catvariablename, png_basename, component))
+							plt.close()
+						else:
+							plt.show()
+				for v, cat in enumerate(ucatvariable):
+					if catlegend is not None:
+						plt.scatter(score_x_test[testcat==cat,c], score_y_test[testcat==cat,c], label = catlegend[v])
+					else:
+						plt.scatter(score_x_test[testcat==cat,c], score_y_test[testcat==cat,c])
+					b, m = np.polynomial.polynomial.polyfit(score_x_test[testcat==cat,c], score_y_test[testcat==cat,c],1)
+					plt.plot(score_x_test[testcat==cat,c], b + m * score_x_test[testcat==cat,c], '-')
+					if Xlabel is not None:
+						plt.xlabel(Xlabel)
+					if Ylabel is not None:
+						plt.ylabel(Xlabel)
+					if cat == ucatvariable[-1]:
+						plt.title("Canonical Component %d [Test]" % (c+1))
+						if catlegend is not None:
+							plt.legend()
+						if png_basename is not None:
+							plt.savefig("%s%s_canonical_corr_test_component%d.png" % (catvariablename, png_basename, component))
+							plt.close()
+						else:
+							plt.show()
 
 
 class scca_rwrapper:
