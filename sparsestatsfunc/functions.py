@@ -539,8 +539,8 @@ class parallel_scca():
 		seeds = generate_seeds(n_bootstrap)
 		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._bootstrap_loadings)(i, seed = seeds[i]) for i in range(n_bootstrap))
 		bxloading, byloading = zip(*output)
-		self.model_boostrapping_loadings_X_train_ = np.array(bxloading)
-		self.model_boostrapping_loadings_Y_train = np.array(byloading)
+		self.model_bootstrapping_loadings_X_train_ = np.array(bxloading)
+		self.model_bootstrapping_loadings_Y_train_ = np.array(byloading)
 
 	def _permute_loadings(self, i, permute_test_data = False, seed = None):
 		"""
@@ -575,7 +575,7 @@ class parallel_scca():
 		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_loadings)(i, seed = seeds[i]) for i in range(self.n_permutations))
 		pxloading, pyloading = zip(*output)
 		self.model_permutations_loadings_X_train_ = np.array(pxloading)
-		self.model_permutations_loadings_X_train_ = np.array(pyloading)
+		self.model_permutations_loadings_Y_train_ = np.array(pyloading)
 
 	def fit_model(self, n_components, X_L1_penalty, y_L1_penalty, max_iter = 20, toself = False):
 		"""
@@ -716,7 +716,6 @@ class parallel_scca():
 			np.random.seed(seed)
 		if p % 200 == 0:
 			print(p)
-		
 		X_perm = self.index_perm(unique_arr = self.ugroup_train_,
 										arr = self.group_train_,
 										variable = self.X_train_)
@@ -737,8 +736,12 @@ class parallel_scca():
 			X_VE_ROI = None
 			Y_VE_ROI = None
 		if permute_loadings:
-			perm_X_sqr_rcs_ = np.square(perm_ssca.x_loadings_)
-			perm_Y_sqr_rcs_ = np.square(perm_ssca.y_loadings_)
+			# maybe use the test data at some point...
+#			xscoretest, yscoretest = perm_ssca.transform(self.X_test_, self.y_test_)
+#			xloadingstest = perm_ssca._calculate_loadings(xscoretest, self.X_test_)
+#			yloadingstest = perm_ssca._calculate_loadings(yscoretest, self.y_test_)
+			perm_X_sqr_rcs_ = np.square(perm_ssca.x_loadings_**2)
+			perm_Y_sqr_rcs_ = np.square(perm_ssca.y_loadings_**2)
 		else:
 			perm_X_sqr_rcs_ = None
 			perm_Y_sqr_rcs_ = None
