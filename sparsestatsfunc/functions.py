@@ -504,7 +504,6 @@ class parallel_scca():
 				else:
 					plt.show()
 
-
 	def _pearsonr_to_t(self, r, N):
 		tvalues = r / np.sqrt(np.divide((1-(r*r)),(N-2)))
 		pvalues = t.sf(np.abs(tvalues), N-1)*2
@@ -1105,6 +1104,9 @@ class parallel_mscca():
 		self.n_jobs = n_jobs
 		self.n_permutations = n_permutations
 
+	def _datestamp(self):
+		print("2022_07_02")
+
 	def nfoldsplit_group(self, group, n_fold = 10, holdout = 0, train_index = None, verbose = False, debug_verbose = False, seed = None):
 		"""
 		Creates indexed array(s) for k-fold cross validation with holdout option for test data. The ratio of the groups are maintained. To reshuffle the training, if can be passed back through via index_train.
@@ -1225,7 +1227,7 @@ class parallel_mscca():
 		self.test_index_ = test_index
 		self.group_ = group
 
-	def parameterselection(self, views, nperms = 100, niter = 3, trace = False):
+	def rparameterselection(self, views, nperms = 100, niter = 3, trace = False):
 		"""
 		Wrapper for PMA's MultiCCA.permute
 		
@@ -1287,6 +1289,7 @@ class parallel_mscca():
 			sumcorr = perm_mssca.cors_[0]
 		return(sumcorr)
 
+	# idea: maybe remove the meanzcorr to test prediction pairs signficance
 	def _permute_variance_explained(self, p, views_train, L1_penalty, max_piter = 5, n_components = 1, seed = None):
 		"""
 		Selection of best number of components using permutation testing.
@@ -1331,6 +1334,7 @@ class parallel_mscca():
 		pvalues = self.fwer_corrected_p(perm_meanzcorr, meanzcorr, right_tail_probability=True)[0]
 		return(meanzcorr, zscore, pvalues, perm_meanzcorr)
 
+	# idea: add custom penalty ranges
 	def run_parallel_parameterselection(self, views, L1_penalty_range = np.arange(0.1,1.1,.1), nperms = 100, niter = 3, verbose = True, fishertransformation = True):
 		assert hasattr(self,'train_index_'), "Error: run create_nfold"
 		
@@ -1442,6 +1446,32 @@ class parallel_mscca():
 		
 		return(perm_cancor_sum_train_, perm_cancor_sum_test_, perm_cancor_pairwise_train_, perm_cancor_pairwise_test_, perm_loadings_train_)
 
+	def _calc_perm_loadings_significance(self):
+		permloadings = self.perm_loadings_train_
+		nperm = len(permloadings)
+		loadings = self.loadings_train_
+		newpermloadings = []
+		zvalues = []
+		pvalues = []
+		for l, loading in enumerate(loadings):
+			abszloading = np.arctanh(abs(loading))
+			temp = np.zeros((nperm, loading.shape[0], loading.shape[1]))
+			for i in range(nperm):
+				temp[i] = abs(permloadings[i][l])
+	#			temp[i] = np.square(permloadings[i][l])
+
+			ztemp = np.divide((abs(abszloading) - temp.mean(0)), temp.std(0))
+			ptemp = np.ones_like(ztemp)
+			for k in range(len(ztemp)):
+				ptemp[k] = self.fwer_corrected_p(temp[:,k,:], abszloading[k], apply_fwer_correction = False)
+			newpermloadings.append(temp)
+			zvalues.append(ztemp)
+			pvalues.append(ptemp)
+		self.perm_loadings_train_abs_ = newpermloadings
+		self.perm_loadings_train_zvalues_ = zvalues
+		self.perm_loadings_train_pvalues_ = pvalues
+
+
 	def run_permute_mscca(self, permute_prediction = False):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		seeds = generate_seeds(self.n_permutations)
@@ -1453,6 +1483,27 @@ class parallel_mscca():
 		self.perm_cc_train_ = np.array(perm_cc_train)
 		self.perm_cc_test_ = np.array(perm_cc_test)
 		self.perm_loadings_train_ = perm_loadings_train
+
+		self._calc_perm_loadings_significance()
+		self.canonicalcorrelation_train_sum_pvalue_ = self.fwer_corrected_p(self.perm_cc_train_sum_, self.canonicalcorrelation_train_zsum_, apply_fwer_correction=False)
+		self.canonicalcorrelation_test_sum_pvalue_ = self.fwer_corrected_p(self.perm_cc_test_sum_, self.canonicalcorrelation_test_zsum_, apply_fwer_correction=False)
+
+		nviewcomparisons = self.perm_cc_test_.shape[1]
+		zcc_train_pairwise = np.arctanh(self.canonicalcorrelation_train_pairwise_)
+		zcc_test_pairwise = np.arctanh(self.canonicalcorrelation_test_pairwise_)
+		temp_cc_train_pair_z = np.zeros_like(zcc_train_pairwise)
+		temp_cc_train_pair_p = np.ones_like(zcc_train_pairwise)
+		temp_cc_test_pair_z = np.zeros_like(zcc_test_pairwise)
+		temp_cc_test_pair_p = np.ones_like(zcc_test_pairwise)
+		for i in range(nviewcomparisons):
+			temp_cc_train_pair_z[i] = np.divide(zcc_train_pairwise[i] - np.mean(self.perm_cc_train_[:,i,:]), np.std(self.perm_cc_train_[:,i,:]))
+			temp_cc_train_pair_p[i] = self.fwer_corrected_p(self.perm_cc_train_[:,i,:], zcc_train_pairwise[i], apply_fwer_correction=False)
+			temp_cc_test_pair_z[i] = np.divide(zcc_test_pairwise[i] - np.mean(self.perm_cc_test_[:,i,:]), np.std(self.perm_cc_test_[:,i,:]))
+			temp_cc_test_pair_p[i] = self.fwer_corrected_p(self.perm_cc_test_[:,i,:], zcc_test_pairwise[i], apply_fwer_correction=False)
+		self.canonicalcorrelation_train_pairwise_zscore_ = temp_cc_train_pair_z
+		self.canonicalcorrelation_train_pairwise_pvalue_ = temp_cc_train_pair_p
+		self.canonicalcorrelation_test_pairwise_zscore_ = temp_cc_test_pair_z
+		self.canonicalcorrelation_test_pairwise_pvalue_ = temp_cc_test_pair_p
 
 	def _convertl1penalty(self, pens, views, reverse = False):
 		"""
@@ -1514,6 +1565,7 @@ class parallel_mscca():
 		self.canonicalcorrelation_test_pairwise_ = cancor_pairwise
 		self.canonicalcorrelation_test_sum_ = cancor_sum
 		self.canonicalcorrelation_test_zsum_ = np.arctanh(cancor_pairwise).sum(0)
+		self.canonicalcorrelation_indices_ = list(itertools.combinations(range(self.nviews_),2))
 
 		self.n_components_ = n_components
 		self.L1_penalty_ = L1_penalty
