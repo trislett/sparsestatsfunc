@@ -4,8 +4,9 @@ import itertools
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 
-from scipy.stats import t, f, norm, chi2
+from scipy.stats import t, f, norm, chi2, pearsonr
 from scipy.linalg import pinv
 from statsmodels.stats.multitest import multipletests, fdrcorrection
 from joblib import Parallel, delayed
@@ -1645,6 +1646,125 @@ class parallel_mscca():
 		else:
 			plt.show()
 
+	def pairplotscores(self, labels, output_test_scores = False, png_basename = None):
+		"""
+		Plots the canonical correlations of each component for the mscca model.
+		
+		Parameters
+		----------
+		Label : list
+			Names for each view in order
+		output_test_scores : bool
+			Output the pair plots for the test data instead of the training data
+		png_basename : str
+			The base output name for the pair plots
+		Returns
+		---------
+		None
+		"""
+		
+		if output_test_scores:
+			scores = []
+			for v in range(self.nviews_):
+				scores.append(np.dot(self.views_test_[v], self.weights_[v]))
+		else:
+			scores = self.model_obj_.scores_
+		nviews, nsubs, ncomp = self.model_obj_.scores_.shape
+		for c in range(self.n_components_):
+			pdTMP = pd.DataFrame()
+			for l, label in enumerate(labels):
+				pdTMP[label] = scores[l,:,c]
+
+			def plt_reg_coef(x,y,label=None,color=None,**kwargs):
+				ax = plt.gca()
+				r,p = pearsonr(x,y)
+				ax.annotate('r = {:.2f}; p = {:.2e}'.format(r, p), xy=(0.5,0.5), xycoords='axes fraction', ha='center')
+				ax.set_axis_off()
+			g = sns.PairGrid(pdTMP)
+			g.map_diag(sns.distplot)
+			g.map_lower(sns.regplot)
+			g.map_upper(plt_reg_coef)
+			g.tight_layout()
+		if png_basename is not None:
+			plt.savefig("%s_comp%d_pair_plot_train.png" % (png_basename, int(c+1)))
+			plt.close()
+		else:
+			plt.show()
+
+
+
+	def plot_permuted_canonical_correlations(self, png_basename = None , n_jitters = 1000):
+		"""
+		Plots the summed fisher transformed canonical correlations across all views compared to values from permuted models. Outputs results for both training data and test data
+		
+		Parameters
+		----------
+		Label : list
+			Names for each view in order
+		output_test_scores : bool
+			Output the pair plots for the test data instead of the training data
+		png_basename : str
+			The base output name for the pair plots
+		Returns
+		---------
+		None
+		"""
+		assert hasattr(self,'self.perm_cc_test_sum_'), "Error: Run run_permute_mscca"
+		if n_jitters > self.n_permutations:
+			n_jitters = self.n_permutations
+		p_num = 1
+		n_plots = self.n_components_ 
+		plt.subplots(figsize=(int(2*n_plots) + 2, 6), dpi=100, tight_layout = True, sharey='row')
+		y1 = round(np.min(np.concatenate((self.canonicalcorrelation_test_zsum_, (self.perm_cc_test_sum_).flatten()))),2) - float(0.5)
+		y2 = round(np.max(np.concatenate((self.canonicalcorrelation_test_zsum_, (self.perm_cc_test_sum_).flatten()))),2) + float(0.5)
+		for c in range(self.n_components_):
+			plt.subplot(1, n_plots, p_num)
+			jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+			rand_dots = self.perm_cc_test_sum_[:n_jitters, c]
+			plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+			plt.xlim(-.5, .5)
+			plt.title("Component %d" % (c+1))
+			plt.scatter(0, self.canonicalcorrelation_test_zsum_[c], marker = 'o', alpha = 1.0, c = 'k')
+			plt.xticks(color='w')
+			plt.ylim(y1, y2)
+			if self.canonicalcorrelation_test_sum_pvalue_[c] == 0:
+				plt.xlabel("z = %1.2f, p $<$ %1.2e" % (self.canonicalcorrelation_test_zsum_[c], (1 / self.n_permutations)), fontsize=10)
+			elif self.canonicalcorrelation_test_sum_pvalue_[c] > 0.001:
+				plt.xlabel("z = %1.2f, p = %1.3f" % (self.canonicalcorrelation_test_zsum_[c], self.canonicalcorrelation_test_sum_pvalue_[c]), fontsize=10)
+			else:
+				plt.xlabel("z = %1.2f, p = %1.2e" % (self.canonicalcorrelation_test_zsum_[c], self.canonicalcorrelation_test_sum_pvalue_[c]), fontsize=10)
+			p_num += 1
+		if png_basename is not None:
+			plt.savefig("%s_model_fit_to_test_with_null.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
+		p_num = 1
+		plt.subplots(figsize=(int(2*n_plots) + 2, 6), dpi=100, tight_layout = True, sharey='row')
+		y1 = round(np.min(np.concatenate((self.canonicalcorrelation_train_zsum_, (self.perm_cc_train_sum_).flatten()))),2) - float(0.5)
+		y2 = round(np.max(np.concatenate((self.canonicalcorrelation_train_zsum_, (self.perm_cc_train_sum_).flatten()))),2) + float(0.5)
+		for c in range(self.n_components_):
+			plt.subplot(1, n_plots, p_num)
+			jitter = np.random.normal(0, scale = 0.1, size=n_jitters)
+			rand_dots = self.perm_cc_train_sum_[:n_jitters, c]
+			plt.scatter(jitter, rand_dots, marker = '.', alpha = 0.3)
+			plt.xlim(-.5, .5)
+			plt.title("Component %d" % (c+1))
+			plt.scatter(0, self.canonicalcorrelation_train_zsum_[c], marker = 'o', alpha = 1.0, c = 'k')
+			plt.xticks(color='w')
+			plt.ylim(y1, y2)
+			if self.canonicalcorrelation_train_sum_pvalue_[c] == 0:
+				plt.xlabel("z = %1.2f, p $<$ %1.2e" % (self.canonicalcorrelation_train_zsum_[c], (1 / self.n_permutations)), fontsize=10)
+			elif self.canonicalcorrelation_train_sum_pvalue_[c] > 0.001:
+				plt.xlabel("z = %1.2f, p = %1.3f" % (self.canonicalcorrelation_train_zsum_[c], self.canonicalcorrelation_train_sum_pvalue_[c]), fontsize=10)
+			else:
+				plt.xlabel("z = %1.2f, p = %1.2e" % (self.canonicalcorrelation_train_zsum_[c], self.canonicalcorrelation_train_sum_pvalue_[c]), fontsize=10)
+			p_num += 1
+		if png_basename is not None:
+			plt.savefig("%s_model_fit_to_train_with_null.png" % png_basename)
+			plt.close()
+		else:
+			plt.show()
 
 
 class mscca_rwrapper:
@@ -1801,8 +1921,6 @@ class mscca_rwrapper:
 			view2_scores = np.dot(views[j], self.weights_[j])
 			canonicalcorrlations.append(np.corrcoef(view1_scores.T, view2_scores.T).diagonal(self.n_components))
 		return(np.array(canonicalcorrlations), np.sum(canonicalcorrlations,0))
-
-#y_predicted = scale(np.dot(pinv(self.y_weights_, rcond=self.effective_zero).T, x_scores.T).T)
 
 	def crossprediction(self, views = None):
 		if views is not None:
