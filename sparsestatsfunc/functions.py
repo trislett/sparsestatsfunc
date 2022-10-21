@@ -1281,6 +1281,7 @@ class parallel_mscca():
 			np.random.seed(seed)
 		if p % 20 == 0:
 			print(p)
+		L1_penalty = self.check_penalties(L1_penalty, views_train, printwarning = False) # the user was already warned
 		perm_mssca = mscca_rwrapper(n_components = n_components,
 											L1_penalty = L1_penalty,
 											max_iter = max_piter).fit(self.permute_views(views_train, seed), just_weights = True)
@@ -1335,6 +1336,17 @@ class parallel_mscca():
 		pvalues = self.fwer_corrected_p(perm_meanzcorr, meanzcorr, right_tail_probability=True)[0]
 		return(meanzcorr, zscore, pvalues, perm_meanzcorr)
 
+	def check_penalties(self, pens, views, printwarning = True):
+		assert len(pens) == len(views), "Error: the L1 penalty must be a scalar or a list equal to len(view)"
+		for p, pen in enumerate(pens):
+			outpen[p] = pen*np.sqrt(views[p].shape[1])
+		if np.sum(outpen < 1.) != 0:
+			for idx in np.where(outpen < 1.)[0]:
+				pens[idx] = np.divide(1., np.sqrt(views[idx].shape[1]))
+				if printwarning:
+					print("Warning: view[%d] has penalty term that is less than 1. Changing the L1 penalty to %1.3f"  % (idx, np.divide(1., np.sqrt(views[idx].shape[1]))))
+		return(pens)
+
 	# idea: add custom penalty ranges
 	def run_parallel_parameterselection(self, views, L1_penalty_range = np.arange(0.1,1.1,.1), nperms = 100, niter = 3, verbose = True, fishertransformation = True):
 		assert hasattr(self,'train_index_'), "Error: run create_nfold"
@@ -1342,12 +1354,13 @@ class parallel_mscca():
 		views_train = self.subsetviews(views, self.train_index_)
 		n_views = len(views_train)
 		self.nviews_ = n_views
-		
-#		if L1_penalty_range.ndim > 1:
-#			assert L1_penalty_range.shape[1] == n_views
 
+		parameterselection_l1_penalties = []
 		cc_train = np.zeros_like(L1_penalty_range)
 		for p, pen in enumerate(L1_penalty_range):
+			outpen = list(np.repeat(pen, n_views))
+			outpen = self.check_penalties(outpen, views)
+			parameterselection_l1_penalties.append(outpen)
 			ps_mssca = mscca_rwrapper(n_components = 1,
 												L1_penalty = list(np.repeat(pen, n_views)),
 												max_iter = 100).fit(views_train, just_weights = True)
@@ -1365,10 +1378,11 @@ class parallel_mscca():
 
 		self.permuteparams_cc_train_ = cc_train
 		self.permuteparams_cc_perm_train_ = perm_cc_train
-		self.permuteparams_cc_zscore_ = np.divide(cc_train - perm_cc_train.mean(1), perm_cc_train.std(1)) # PMA adds 0.05. The std will never be zero, so I'm taking it out.
+		self.permuteparams_cc_zscore_ = np.divide(cc_train - perm_cc_train.mean(1), perm_cc_train.std(1)) # PMA adds 0.05. The std will never be zero. I'm taking it out.
 		self.permuteparams_cc_pvalues_ = self.fwer_corrected_p(perm_cc_train.T, cc_train, apply_fwer_correction = False)
 		self.permuteparams_cc_besttuningindex_ = np.argmax(self.permuteparams_cc_zscore_)
 		self.permuteparams_cc_bestpenalties_ = L1_penalty_range[self.permuteparams_cc_besttuningindex_]
+		self.permuteparams_cc_l1penalties_ = np.array(parameterselection_l1_penalties)
 
 	def fwer_corrected_p(self, permuted_arr, target, right_tail_probability = True, apply_fwer_correction = True):
 		"""
@@ -2000,6 +2014,11 @@ class mscca_rwrapper:
 					outpen[p] = np.divide(pens,np.sqrt(views[p].shape[1]))
 				else:
 					outpen[p] = pens*np.sqrt(views[p].shape[1])
+		if not reverse:
+			if np.sum(outpen < 1.) != 0:
+				for idx in np.where(outpen < 1.)[0]:
+					outpen[idx] = 1.
+					print("Warning: view[%d] has penalty term that is less than 1. Changing the L1 penalty to %1.3f"  % (idx, np.divide(1., np.sqrt(views[idx].shape[1]))))
 		return(np.array(outpen))
 
 	def _calculate_loadings(self, data_scores, data):
