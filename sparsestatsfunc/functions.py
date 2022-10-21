@@ -1338,6 +1338,7 @@ class parallel_mscca():
 
 	def check_penalties(self, pens, views, printwarning = True):
 		assert len(pens) == len(views), "Error: the L1 penalty must be a scalar or a list equal to len(view)"
+		outpen = np.zeros((len(views)))
 		for p, pen in enumerate(pens):
 			outpen[p] = pen*np.sqrt(views[p].shape[1])
 		if np.sum(outpen < 1.) != 0:
