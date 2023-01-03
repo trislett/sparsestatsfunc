@@ -90,7 +90,7 @@ class parallel_scca():
 		self.n_jobs = n_jobs
 		self.n_permutations = n_permutations
 	def _check(self):
-		print("2022_03_01")
+		print("2023_03_01")
 	def index_perm(self, unique_arr, arr, variable, within_group = True):
 		"""
 		Shuffles an array within group (within_group = True) or the groups (within_group = False)
@@ -1106,7 +1106,7 @@ class parallel_mscca():
 		self.n_permutations = n_permutations
 
 	def _datestamp(self):
-		print("2022_07_02")
+		print("2023_03_01")
 
 	def nfoldsplit_group(self, group, n_fold = 10, holdout = 0, train_index = None, verbose = False, debug_verbose = False, seed = None):
 		"""
@@ -1257,6 +1257,24 @@ class parallel_mscca():
 		for v in range(len(views)):
 			subsetdata.append(views[v][indices])
 		return(subsetdata)
+
+	def _fwepremute_train_loadings(self, p, seed):
+		"""
+		TESTING: Calculates the max loading
+		"""
+		perm_mssca = mscca_rwrapper(n_components = 1, L1_penalty = self.L1_penalty_, max_iter = 5).fit(self.permute_views(self.views_train_, seed))
+		maxr = np.zeros((self.nviews_))
+		for v in range(self.nviews_):
+			maxr[v] = np.max(np.abs(self.model_obj_._calculate_loadings(perm_mssca.scores_[v], self.views_train_[v])))
+		return(maxr)
+
+	def primary_permute_loadings(self, n_components = 1, n_permutations = 5000):
+		"""
+		TESTING: Calculates the max loading in PARALLEL
+		"""
+		seeds = generate_seeds(n_permutations)
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(_fwepremute_train_loadings)(self, p, seed = seeds[p]) for p in range(n_permutations))
+		return(np.array(output))
 
 	def permute_views(self, views, seed = None):
 		"""
@@ -1498,7 +1516,7 @@ class parallel_mscca():
 		self.perm_cc_test_sum_ = np.array(perm_cc_test_sum)
 		self.perm_cc_train_ = np.array(perm_cc_train)
 		self.perm_cc_test_ = np.array(perm_cc_test)
-		self.perm_loadings_train_ = perm_loadings_train
+		self._premute_train_loadings = perm_loadings_train
 
 		self._calc_perm_loadings_significance()
 		self.canonicalcorrelation_train_sum_pvalue_ = self.fwer_corrected_p(self.perm_cc_train_sum_, self.canonicalcorrelation_train_zsum_, apply_fwer_correction=False)
@@ -1541,7 +1559,6 @@ class parallel_mscca():
 				else:
 					outpen[p] = pens*np.sqrt(views[p].shape[1])
 		return(np.array(outpen))
-
 
 	def fit_model(self, views, n_components, L1_penalty, max_iter = 100):
 		"""
@@ -1681,7 +1698,7 @@ class parallel_mscca():
 		if output_test_scores:
 			scores = []
 			for v in range(self.nviews_):
-				scores.append(np.dot(self.views_test_[v], self.weights_[v]))
+				scores.append(np.dot(self.views_test_[v], self.model_obj_.weights_[v]))
 		else:
 			scores = self.model_obj_.scores_
 		nviews, nsubs, ncomp = self.model_obj_.scores_.shape
@@ -1701,7 +1718,10 @@ class parallel_mscca():
 			g.map_upper(plt_reg_coef)
 			g.tight_layout()
 		if png_basename is not None:
-			plt.savefig("%s_comp%d_pair_plot_train.png" % (png_basename, int(c+1)))
+			if output_test_scores:
+				plt.savefig("%s_comp%d_pair_plot_test.png" % (png_basename, int(c+1)))
+			else:
+				plt.savefig("%s_comp%d_pair_plot_train.png" % (png_basename, int(c+1)))
 			plt.close()
 		else:
 			plt.show()
@@ -1958,7 +1978,7 @@ class mscca_rwrapper:
 			view_hat = scale(np.dot(pinv(self.weights_[view_indices], rcond=self.effective_zero).T, scores.T).T)
 		return(view_hat)
 
-	def _rscore_crossprediction(self, views_true = None, views_hat = None, view_indices = None, onlyselected = True):
+	def _rscore_crossprediction(self, views_true = None, views_hat = None, view_indices = None, onlyselected = True, use_spearman = False):
 		if views_true is None:
 			view_indices, views_hat = self.crossprediction()
 			views_true = self.views_
@@ -1974,6 +1994,9 @@ class mscca_rwrapper:
 			if onlyselected:
 				true = true[:, self.selectedvariablesindex_[view_indices[c][0]] == 1]
 				pred = pred[:, self.selectedvariablesindex_[view_indices[c][0]] == 1]
+			if use_spearman:
+				true = scale(rankdata(true, axis=0))
+				pred = scale(rankdata(pred, axis=0))
 			views_mean_rho[c] = self._rscore(true = true, predicted = pred, mean_score = True)
 			views_rho.append(self._rscore(true = true, predicted = pred, mean_score = False))
 		return(view_indices, views_mean_rho, views_rho)
