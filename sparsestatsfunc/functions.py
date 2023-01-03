@@ -5,6 +5,7 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pandas as pd
 
 from scipy.stats import t, f, norm, chi2, pearsonr
 from scipy.linalg import pinv
