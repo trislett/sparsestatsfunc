@@ -1516,7 +1516,7 @@ class parallel_mscca():
 		self.perm_cc_test_sum_ = np.array(perm_cc_test_sum)
 		self.perm_cc_train_ = np.array(perm_cc_train)
 		self.perm_cc_test_ = np.array(perm_cc_test)
-		self._premute_train_loadings = perm_loadings_train
+		self.perm_loadings_train_ = perm_loadings_train
 
 		self._calc_perm_loadings_significance()
 		self.canonicalcorrelation_train_sum_pvalue_ = self.fwer_corrected_p(self.perm_cc_train_sum_, self.canonicalcorrelation_train_zsum_, apply_fwer_correction=False)
