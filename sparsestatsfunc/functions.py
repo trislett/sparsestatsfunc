@@ -1263,6 +1263,8 @@ class parallel_mscca():
 		"""
 		TESTING: Calculates the max loading
 		"""
+		if p % 100 == 0:
+			print(p)
 		perm_mssca = mscca_rwrapper(n_components = 1, L1_penalty = self.L1_penalty_, max_iter = 5).fit(self.permute_views(self.views_train_, seed))
 		maxr = np.zeros((self.nviews_))
 		for v in range(self.nviews_):
@@ -1274,7 +1276,7 @@ class parallel_mscca():
 		TESTING: Calculates the max loading in PARALLEL
 		"""
 		seeds = generate_seeds(n_permutations)
-		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(_fwepremute_train_loadings)(self, p, seed = seeds[p]) for p in range(n_permutations))
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._fwepremute_train_loadings)(p, seed = seeds[p]) for p in range(n_permutations))
 		return(np.array(output))
 
 	def permute_views(self, views, seed = None):
@@ -1403,6 +1405,7 @@ class parallel_mscca():
 		self.permuteparams_cc_besttuningindex_ = np.argmax(self.permuteparams_cc_zscore_)
 		self.permuteparams_cc_bestpenalties_ = L1_penalty_range[self.permuteparams_cc_besttuningindex_]
 		self.permuteparams_cc_l1penalties_ = np.array(parameterselection_l1_penalties)
+		return(cc_train, perm_cc_train)
 
 	def fwer_corrected_p(self, permuted_arr, target, right_tail_probability = True, apply_fwer_correction = True):
 		"""
@@ -1444,8 +1447,6 @@ class parallel_mscca():
 			pval_corrected = 1 - pval_corrected
 		return(pval_corrected)
 
-
-		return(cc_train, perm_cc_train)
 
 	def _permute_function_mscca(self, p, permute_prediction = False, max_piter = 5, seed = None):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
@@ -2055,7 +2056,7 @@ class mscca_rwrapper:
 		n_targets = data.shape[1]
 		loadings = np.zeros((n_components, n_targets))
 		for c in range(n_components):
-			loadings[c,:] = cy_lin_lstsqr_mat(data_scores[:,c].reshape(-1,1), data)[0]
+			loadings[c,:] = cy_lin_lstsqr_mat(scale(data_scores[:,c]).reshape(-1,1), scale(data))[0]
 		return(loadings)
 
 	def _pearsonr_to_t(self, r, N):
@@ -2200,7 +2201,7 @@ class scca_rwrapper:
 		n_targets = data.shape[1]
 		loadings = np.zeros((n_components, n_targets))
 		for c in range(n_components):
-			loadings[c,:] = cy_lin_lstsqr_mat(data_scores[:,c].reshape(-1,1), data)[0]
+			loadings[c,:] = cy_lin_lstsqr_mat(scale(data_scores[:,c]).reshape(-1,1), scale(data))[0]
 		return(loadings)
 
 	def transform(self, X = None, y = None):
