@@ -13,6 +13,7 @@ from statsmodels.stats.multitest import multipletests, fdrcorrection
 from joblib import Parallel, delayed
 
 from sklearn.preprocessing import scale
+from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_squared_error, explained_variance_score
 from sklearn.cross_decomposition import PLSRegression, CCA, PLSCanonical
 
@@ -34,6 +35,11 @@ utils = importr('utils')
 
 # autoinstalls the r packages... not the smartest thing to do.
 # create an install R + packages script later
+try:
+	rgcca = importr('RGCCA')
+except:
+	utils.install_packages('RGCCA')
+	rgcca = importr('RGCCA')
 try:
 	from sparsecca._cca_pmd import cca as sparsecca
 	have_sparsecca = True
@@ -81,6 +87,439 @@ def pickle_load_model(filename):
 	with open(filename, 'rb') as pfile:
 		model = pickle.load(pfile)
 	return(model)
+
+class sgcca_rwrapper:
+	"""
+	Wrapper class for the SGCCA function of the R package RGCCA.
+	https://rdrr.io/cran/RGCCA/man/sgcca.html
+	"""
+	def __init__(self, design_matrix = None, l1_sparsity = None, n_comp = 1, scheme = "centroid", scale = True, init = "svd", bias = True, effective_zeros = sys.float_info.epsilon):
+		"""
+		Initialize the wrapper with hyperparameters for SGCCA.
+
+		Parameters:
+		-----------
+		design_matrix : np.ndarray or None
+			A matrix that specifies the structure of the data. 
+			Default value is None, in which case the design matrix is set to (1 - identity(n_views)).
+		l1_sparsity : float or np.ndarray or None
+			A float or an array of floats that specifies the sparsity penalty on the outer weights.
+			Default value is None, in which case the penalty is set to 1 for all views.
+		n_comp : int or np.ndarray
+			An integer or an array of integers that specifies the number of components for each view.
+			Default value is 1 for all views.
+		scheme : str
+			A string that specifies the algorithm used to solve the optimization problem.
+			Default value is "centroid".
+		scale : bool
+			A boolean that specifies whether to scale the views before running SGCCA.
+			Default value is True.
+		init : str
+			A string that specifies the initialization method used to initialize the optimization problem.
+			Default value is "svd".
+		bias : bool
+			A boolean that specifies whether to include a bias term in the optimization problem.
+			Default value is True.
+		effective_zero : float
+			A float that specifies a small value to use as an effective zero.
+
+		Returns:
+		--------
+		None
+		"""
+		self.design_matrix = design_matrix
+		self.l1_sparsity = l1_sparsity
+		self.n_comp = n_comp
+		self.scheme = scheme
+		self.scale = scale
+		self.init = init
+		self.bias = bias
+		self.penalty = "l1"
+		self.effective_zero = effective_zero
+
+	def scaleviews(self, views, centre = True, scale = True, div_sqr_numvar = True, axis = 0):
+		"""
+		Helper function to center and scale the views.
+
+		Parameters:
+		-----------
+		views : list of np.ndarrays
+			A list of numpy arrays that represent the views.
+		centre : bool
+			A boolean that specifies whether to center the views.
+			Default value is True.
+		scale : bool
+			A boolean that specifies whether to scale the views.
+			Default value is True.
+		div_sqr_numvar : bool
+			A boolean that specifies whether to divide the views by the square root of the number of variables.
+			Default value is True.
+		axis : int
+			An integer that specifies the axis to use when computing the mean and standard deviation.
+
+		Returns:
+		--------
+		scaled_views : list of np.ndarrays
+			A list of numpy arrays that represent the scaled views.
+		"""
+		scaled_views = []
+		for x in views:
+			x_mean = np.mean(x, axis = axis)
+			x_std = np.std(x, axis = axis)
+			if centre:
+				x = x - x_mean
+			if scale:
+				x = np.divide(x, x_std)
+			if div_sqr_numvar:
+				x = np.divide(x, np.sqrt(x.shape[1]))
+			scaled_views.append(x)
+		return(list(scaled_views))
+
+	def _rlist_to_nplist(self, robj):
+		"""
+		Converts an R list to a list of numpy arrays.
+		"""
+		len_robj = len(robj)
+		arr_list = []
+		for i in range(len_robj):
+			arr_list.append(np.array(robj[i]))
+		return(arr_list)
+
+	def check_sparsity(self):
+		"""
+		Checks if l1_sparsity is valid and adjusts it if necessary.
+		"""
+		for v in range(self.n_views_):
+			sthrehold = 1 / np.sqrt(self.views_[v].shape[1])
+			sparsity = self.l1_sparsity[v]
+			if sparsity < sthrehold:
+				nsparsity = np.round(np.round(sthrehold, 4) + 0.0001, 4)
+				print("Sparsity of view[%d] is too low. Adjusting to new value = %1.4f" %(int(v), nsparsity))
+				self.l1_sparsity[:,v] = nsparsity
+
+	def fit(self, X):
+		"""
+		Fits the model to the given views.
+		
+		Parameters:
+		-----------
+		X: list of arrays or array-like
+			The views to fit the model on.
+
+		Returns:
+		--------
+		self: instance of sgcca_rwrapper
+			Returns the instance of the class.
+		"""
+		self.views_ = X
+		self.n_views_ = len(self.views_)
+		# Default: complete design
+		# eg. design_mat = np.zeros((8, 8))
+		# design_mat[1:,:1] = 1
+		# design_mat[:1,1:] = 1
+		# set scheme = "factorial"
+		if self.design_matrix is None:
+			self.design_matrix = 1 - np.identity(self.n_views_)
+		# l1 contraints to the outer weights ranging from 1/sqrt(view[j].shape[1]) to 1. i.e., 1 / sqrt(nvars) per data view is the minimum sparsity.
+		if self.l1_sparsity is None:
+			self.l1_sparsity = np.repeat(1., self.n_views_)
+		if np.isscalar(self.l1_sparsity):
+			self.l1_sparsity = np.repeat(self.l1_sparsity, self.n_views_)
+		if np.isscalar(self.n_comp):
+			self.n_comp = np.repeat(self.n_comp, self.n_views_)
+		if self.scale:
+			self.views_ = self.scaleviews(self.views_)
+		self.check_sparsity()
+		numpy2ri.activate()
+		fit = rgcca.sgcca(A = self.views_, 
+							C = self.design_matrix,
+							c1 = np.tile(self.l1_sparsity, np.max(self.n_comp)).reshape(np.max(self.n_comp), self.n_views_),
+							ncomp = self.n_comp, 
+							scheme = self.scheme,
+							scale = False,
+							init = self.init,
+							bias = self.bias,
+							tol = self.effective_zero,
+							verbose  = False)
+		numpy2ri.deactivate()
+
+		self.scores_ = np.array(fit.rx2('Y'))
+		self.weights_outer_ = self._rlist_to_nplist(fit.rx2('a'))
+		self.weights_ = self._rlist_to_nplist(fit.rx2('astar'))
+		self.AVE_views_ = np.array(fit.rx2('AVE')[0]) # this is the mean of the structural coefficents
+		self.AVE_outer_ = np.array(fit.rx2('AVE')[1])
+		self.AVE_inner_ = np.array(fit.rx2('AVE')[2])
+		return(self)
+
+	def transform(self, views, calculate_loading = False, outer = False):
+		"""
+		Transform input views into scores (canonical variates).
+
+		Parameters:
+		-----------
+			views (list): A list of views to be transformed.
+			calculate_loading (bool, optional): Whether to calculate the loadings or not. Defaults to False.
+			outer (bool, optional): Whether to use outer weights or not. Defaults to False.
+
+		Returns:
+		--------
+			scores: array(n_views, n_subjects, n_components)
+				An array of transformed views
+			(Optional) loadings: list (n_views)
+				if calculate_loading is true, transformed views and a list of the loadings().
+		"""
+		assert len(views) == len(self.views_), "Error: The length ofviews and does not match model's number of views. Try transform_view"
+		if outer:
+			weights = self.weights_outer_
+		else:
+			weights = self.weights_
+		views = self.scaleviews(views)
+		scores = []
+		for v in range(self.n_views_):
+			scores.append(np.dot(views[v], weights[v]))
+		scores = np.array(scores)
+		if calculate_loading:
+			loadings = []
+			for v in range(self.n_views_):
+				vloadings = np.zeros((weights[v].shape))
+				for c in range(self.n_comp[v]):
+					vloadings[:,c] = cy_lin_lstsqr_mat(scale(scores[v][:,c]).reshape(-1,1), scale(views[v]))[0]
+				loadings.append(vloadings)
+			return(scores, loadings)
+		else:
+			return(scores)
+
+	def transform_view(self, view, view_index):
+		"""
+		Calculate the scores (canonical variates) for a single view.
+		"""
+		assert view.shape[1] == self.views_[view_index].shape[1], "Error: the input view and model view_index must have the same number variables"
+		X = self.scaleviews((list([view]))[0])
+		scores = []
+		for v in range(self.n_views_):
+			scores.append(np.dot(views[X], self.weights_[v]))
+		scores = np.array(scores)
+		return(scores)
+
+	def transform_scores(self, view, scores):
+		"""
+		Calculates loadings using cython optimizated least square regression
+		Returns loadings with the shape n_targets, n_components
+		"""
+		n_components = scores.shape[1]
+		n_targets = view.shape[1]
+		loadings = np.zeros((n_targets, n_components))
+		for c in range(n_components):
+			loadings[:,c] = cy_lin_lstsqr_mat(scale(scores[:,c]).reshape(-1,1), scale(view))[0]
+		return(loadings)
+
+	def inverse_transform(self, scores, view_index):
+		"""
+		Transforms a score back to original space.
+		"""
+		if hasattr(self, 'loadings_') is False:
+			self.loadings_ = self.transform(self.views_, calculate_loading = True)[1]
+		proj = np.matmul(scores, self.loadings_[view_index].T)
+		proj *= np.std(self.views_[view_index], 0)
+		proj += np.std(self.views_[view_index], 0)
+		return(proj)
+
+	def predict(self, scores, response_index, verbose = False):
+		"""
+		Score prediction based on a linear regression model with one view as the response variable.
+		"""
+		if scores.ndim == 2:
+			scores = scores[:,:,np.newaxis]
+		n_view, n_subjects, n_comps = scores.shape
+		independent_index = np.arange(0, n_view, 1)
+		independent_index = independent_index[independent_index!=response_index]
+		yhat = np.zeros((scores[response_index,:,:].shape))
+		for i in range(10):
+			X_ = scores[independent_index,:,i].T
+			Y_ = scores[response_index,:,i].T
+			reg = LinearRegression(fit_intercept=False).fit(X_,Y_)
+			if verbose:
+				R2score = reg.score(X_,Y_)
+				print("Component [%d] R2(score) = %1.3f" % (int(i+1), R2score))
+			yhat[:, i] = reg.predict(X_)
+		return(yhat)
+
+class parallel_sgcca():
+	def __init__(self, n_jobs = 8, n_permutations = 10000):
+		"""
+		Main SGCCA function
+		"""
+		self.n_jobs = n_jobs
+		self.n_permutations = n_permutations
+	def _datestamp(self):
+		print("2023_21_04")
+	def nfoldsplit_group(self, group, n_fold = 10, holdout = 0, train_index = None, verbose = False, debug_verbose = False, seed = None):
+		"""
+		Creates indexed array(s) for k-fold cross validation with holdout option for test data. The ratio of the groups are maintained. To reshuffle the training, if can be passed back through via index_train.
+		The indices are always based on the original grouping variable. i.e., the orignal data.
+		
+		Parameters
+		----------
+		group : array
+			List array with length of number of subjects. 
+		n_fold : int
+			The number of folds
+		holdout : float
+			The amount of data to holdout ranging from 0 to <1. A reasonable holdout is around 0.3 or 30 percent. If holdout = None, then returns test_index = None. (default = 0)
+		train_index : array
+			Indexed array of training data. Holdout must be zero (holdout = 0). It is useful for re-shuffling the fold indices or changing the number of folds.
+		verbose : bool
+			Prints out the splits and some basic information
+		debug_verbose: bool
+			Prints out the indices by group
+		Returns
+		---------
+		train_index : array
+			index array of training data
+		fold_indices : object
+			the index array for each fold (n_folds, training_fold_size)
+		test_index : array or None
+			index array of test data
+		"""
+		
+		if seed is None:
+			np.random.seed(np.random.randint(4294967295))
+		else:
+			np.random.seed(seed)
+		
+		test_index = None
+		original_group = group[:]
+		ugroup = np.unique(group)
+		lengroup = len(group)
+		indices = np.arange(0,lengroup,1)
+		if holdout != 0:
+			assert holdout < 1., "Error: Holdout ratio must be >0 and <1.0. Try .3"
+			assert train_index is None, "Error: train index already exists."
+			indx_0 = []
+			indx_1 = []
+			for g in ugroup:
+				pg = np.random.permutation(indices[group==g])
+				indx_0.append(pg[:int(len(pg)*holdout)])
+				indx_1.append(pg[int(len(pg)*holdout):])
+			train_index = np.concatenate(indx_1)
+			test_index = np.concatenate(indx_0)
+			group = group[train_index]
+			if verbose:
+				print("Train data size = %s, Test data size = %s [holdout = %1.2f]" %(len(train_index), len(test_index), holdout))
+		else:
+			if train_index is None:
+				train_index = indices[:]
+			else:
+				group = group[train_index]
+		# reshuffle for good luck
+		gsize = []
+		shuffle_train = []
+		for g in ugroup:
+			pg = np.random.permutation(train_index[group==g])
+			gsize.append(len(pg))
+			shuffle_train.append(pg)
+		train_index = np.concatenate(shuffle_train)
+		group = original_group[train_index]
+		split_sizes = np.divide(gsize, n_fold).astype(int)
+		if verbose:
+			for s in range(len(ugroup)):
+				print("Training group [%s]: size n=%d, split size = %d, remainder = %d" % (ugroup[s], gsize[s], split_sizes[s], int(gsize[s] % split_sizes[s])))
+			if test_index is not None:
+				for s in range(len(ugroup)):
+					original_group[test_index] == ugroup[s]
+					test_size = np.sum((original_group[test_index] == ugroup[s])*1)
+					print("Test group [%s]: size n=%d, holdout percentage = %1.2f" % (ugroup[s], test_size, np.divide(test_size * 100, test_size+gsize[s])))
+		fold_indices = []
+		for n in range(n_fold):
+			temp_index = []
+			for i, g in enumerate(ugroup):
+				temp = train_index[group==g]
+				if n == n_fold-1:
+					temp_index.append(temp[n*split_sizes[i]:])
+				else:
+					temp_index.append(temp[n*split_sizes[i]:((n+1)*split_sizes[i])])
+				if debug_verbose:
+					print(n)
+					print(g)
+					print(original_group[temp_index[-1]])
+					print(temp_index[-1])
+			fold_indices.append(np.concatenate(temp_index))
+		train_index = np.sort(train_index)
+		fold_indices = np.array(fold_indices, dtype = object)
+		if holdout != 0:
+			test_index = np.sort(test_index)
+		if verbose:
+			for i in range(n_fold):
+				print("\nFOLD %d:" % (i+1))
+				print(np.sort(original_group[fold_indices[i]]))
+			if test_index is not None:
+				print("\nTEST:" )
+				print(np.sort(original_group[test_index]))
+		return(fold_indices, train_index, test_index)
+	def create_nfold(self, group, n_fold = 10, holdout = 0.3, verbose = True):
+		"""
+		Imports the data and runs nfoldsplit_group.
+		"""
+		fold_indices, train_index, test_index  = self.nfoldsplit_group(group = group,
+																							n_fold = n_fold,
+																							holdout = holdout,
+																							train_index = None,
+																							verbose = verbose,
+																							debug_verbose = False)
+		self.train_index_ = train_index
+		self.fold_indices_ = fold_indices
+		self.test_index_ = test_index
+		self.group_ = group
+	def subsetviews(self, views, indices):
+		subsetdata = []
+		for v in range(len(views)):
+			subsetdata.append(views[v][indices])
+		return(subsetdata)
+
+#from scipy.stats import gaussian_kde
+
+#def scatter_hist(x, y, xlabel = None, ylabel = None):
+#	def _scatter_hist(x, y, ax, ax_histx, ax_histy, xlabel = None, ylabel = None):
+#		# no labels
+#		ax_histx.tick_params(axis="x", labelbottom=False)
+#		ax_histy.tick_params(axis="y", labelleft=False)
+#		# the scatter plot:
+##		ax.scatter(x, y)
+#		sns.regplot(x, y, ax = ax)
+#		x0,x1 = ax.get_xlim()
+#		y0,y1 = ax.get_ylim()
+#		binwidth = 0.01
+#		ax_histx.hist(x, bins=np.arange(x0, x1, x.var()*2), density=True)
+#		xs_ = np.linspace(x0, x1, 301)
+#		kde = gaussian_kde(x)
+#		ax_histx.plot(xs_, kde.pdf(xs_))
+#		ax_histy.hist(y, bins=np.arange(y0, y1, y.var()*2), orientation='horizontal', density=True)
+#		ys_ = np.linspace(y0, y1, 301)
+#		kde = gaussian_kde(y)
+#		ax_histy.plot(kde.pdf(ys_), ys_)
+#	fig = plt.figure(figsize=(7, 6))
+#	# Add a gridspec with two rows and two columns and a ratio of 1 to 4 between
+#	# the size of the marginal axes and the main axes in both directions.
+#	# Also adjust the subplot parameters for a square plot.
+#	gs = fig.add_gridspec(2, 2,  width_ratios=(4, 1), height_ratios=(1, 4),
+#								left=0.1, right=0.9, bottom=0.1, top=0.9,
+#								wspace=0.05, hspace=0.05)
+#	# Create the Axes.
+#	ax = fig.add_subplot(gs[1, 0])
+#	if xlabel is not None:
+#		ax.set_xlabel(xlabel)
+#	if ylabel is not None:
+#		ax.set_ylabel(ylabel)
+#	ax_histx = fig.add_subplot(gs[0, 0], sharex=ax)
+#	ax_histy = fig.add_subplot(gs[1, 1], sharey=ax)
+#	# Draw the scatter plot and marginals.
+#	_scatter_hist(x, y, ax, ax_histx, ax_histy, xlabel = xlabel, ylabel = ylabel)
+#scatter_hist(yhat, Y_, 'Neuroimaging', 'Clinical')
+#plt.tight_layout()
+#plt.show()
+
+
+
 
 class parallel_scca():
 
@@ -1447,82 +1886,35 @@ class parallel_mscca():
 			pval_corrected = 1 - pval_corrected
 		return(pval_corrected)
 
-
-	def _permute_function_mscca(self, p, permute_prediction = False, max_piter = 5, seed = None):
-		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+	def _permute_function_mscca(self, p, max_piter = 5, seed = None):
 		if p % 10 == 0:
 			print(p)
+		perm_views = self.permute_views(self.views_train_, seed)
 		perm_mssca = mscca_rwrapper(n_components = self.n_components_,
 											L1_penalty = self.L1_penalty_,
-											max_iter = max_piter).fit(self.permute_views(self.views_train_, seed))
-		if permute_prediction:
-			rho_train = []
-			rho_train_targets = []
-			for v in range(self.nviews_):
-				viewhat = perm_mssca.predict(perm_mssca.views_[v], v)
-				rho_train.append(perm_mssca._rscore(perm_mssca.views_[v], viewhat))
-				rho_train_targets.append(perm_mssca._rscore(perm_mssca.views_[v], viewhat, mean_score = False))
-			rho_test = []
-			rho_test_targets = []
-			for v in range(self.nviews_):
-				viewhat = perm_mssca.predict(self.views_test_[v], v)
-				rho_test.append(perm_mssca._rscore(self.views_test_[v], viewhat))
-				rho_test_targets.append(perm_mssca._rscore(self.views_test_[v], viewhat, mean_score = False))
-
-		# fisher z transformation arctanh
+											max_iter = max_piter).fit(perm_views, just_weights = False)
 		perm_cancor_pairwise_train_, _ = perm_mssca.canonicalcorrviews()
-		perm_cancor_pairwise_train_ = np.arctanh(perm_cancor_pairwise_train_)
-		perm_cancor_sum_train_ = perm_cancor_pairwise_train_.sum(0)
-		perm_loadings_train_ = perm_mssca.loadings_
-		for v in range(self.nviews_):
-			perm_loadings_train_[v] = np.arctanh(perm_loadings_train_[v])
+		perm_cancor_pairwise_ztrain_ = np.arctanh(perm_cancor_pairwise_train_)
+		perm_cancor_sum_train_ = perm_cancor_pairwise_ztrain_.sum(0)
 		perm_cancor_pairwise_test_, _ = perm_mssca.canonicalcorrviews(self.views_test_)
-		perm_cancor_pairwise_test_ = np.arctanh(perm_cancor_pairwise_test_)
-		perm_cancor_sum_test_ = perm_cancor_pairwise_test_.sum(0)
-		
-		return(perm_cancor_sum_train_, perm_cancor_sum_test_, perm_cancor_pairwise_train_, perm_cancor_pairwise_test_, perm_loadings_train_)
+		perm_cancor_pairwise_ztest_ = np.arctanh(perm_cancor_pairwise_test_)
+		perm_cancor_sum_test_ = perm_cancor_pairwise_ztest_.sum(0)
+		perm_weights_ = np.concatenate(perm_mssca.weights_)
+		return(perm_cancor_sum_train_, perm_cancor_sum_test_, perm_cancor_pairwise_ztrain_, perm_cancor_pairwise_ztest_, perm_weights_)
 
-	def _calc_perm_loadings_significance(self):
-		permloadings = self.perm_loadings_train_
-		nperm = len(permloadings)
-		loadings = self.loadings_train_
-		newpermloadings = []
-		zvalues = []
-		pvalues = []
-		for l, loading in enumerate(loadings):
-			abszloading = np.arctanh(abs(loading))
-			temp = np.zeros((nperm, loading.shape[0], loading.shape[1]))
-			for i in range(nperm):
-				temp[i] = abs(permloadings[i][l])
-	#			temp[i] = np.square(permloadings[i][l])
-
-			ztemp = np.divide((abs(abszloading) - temp.mean(0)), temp.std(0))
-			ptemp = np.ones_like(ztemp)
-			for k in range(len(ztemp)):
-				ptemp[k] = self.fwer_corrected_p(temp[:,k,:], abszloading[k], apply_fwer_correction = False)
-			newpermloadings.append(temp)
-			zvalues.append(ztemp)
-			pvalues.append(ptemp)
-		self.perm_loadings_train_abs_ = newpermloadings
-		self.perm_loadings_train_zvalues_ = zvalues
-		self.perm_loadings_train_pvalues_ = pvalues
-
-
-	def run_permute_mscca(self, permute_prediction = False):
+	def run_permute_mscca(self):
 		assert hasattr(self,'model_obj_'), "Error: run fit_model"
 		seeds = generate_seeds(self.n_permutations)
-		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_mscca)(p, permute_prediction = permute_prediction, seed = seeds[p]) for p in range(self.n_permutations))
-		perm_cc_train_sum, perm_cc_test_sum, perm_cc_train, perm_cc_test, perm_loadings_train = zip(*output)
+		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_mscca)(p, seed = seeds[p]) for p in range(self.n_permutations))
+		perm_cc_train_sum, perm_cc_test_sum, perm_cc_train, perm_cc_test, perm_weights_ = zip(*output)
 
 		self.perm_cc_train_sum_ = np.array(perm_cc_train_sum)
 		self.perm_cc_test_sum_ = np.array(perm_cc_test_sum)
 		self.perm_cc_train_ = np.array(perm_cc_train)
-		self.perm_cc_test_ = np.array(perm_cc_test)
-		self.perm_loadings_train_ = perm_loadings_train
+		self.perm_weights_ = np.array(perm_weights_)
 
-		self._calc_perm_loadings_significance()
-		self.canonicalcorrelation_train_sum_pvalue_ = self.fwer_corrected_p(self.perm_cc_train_sum_, self.canonicalcorrelation_train_zsum_, apply_fwer_correction=False)
-		self.canonicalcorrelation_test_sum_pvalue_ = self.fwer_corrected_p(self.perm_cc_test_sum_, self.canonicalcorrelation_test_zsum_, apply_fwer_correction=False)
+		self.canonicalcorrelation_train_sum_pvalue_ = self.fwer_corrected_p(self.perm_cc_train_sum_, self.canonicalcorrelation_train_zsum_, apply_fwer_correction = False)
+		self.canonicalcorrelation_test_sum_pvalue_ = self.fwer_corrected_p(self.perm_cc_test_sum_, self.canonicalcorrelation_test_zsum_, apply_fwer_correction = False)
 
 		nviewcomparisons = self.perm_cc_test_.shape[1]
 		zcc_train_pairwise = np.arctanh(self.canonicalcorrelation_train_pairwise_)
@@ -1540,6 +1932,102 @@ class parallel_mscca():
 		self.canonicalcorrelation_train_pairwise_pvalue_ = temp_cc_train_pair_p
 		self.canonicalcorrelation_test_pairwise_zscore_ = temp_cc_test_pair_z
 		self.canonicalcorrelation_test_pairwise_pvalue_ = temp_cc_test_pair_p
+
+
+### LEGACY
+
+#	def _permute_function_mscca(self, p, permute_prediction = False, max_piter = 5, seed = None):
+#		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+#		if p % 10 == 0:
+#			print(p)
+#		perm_mssca = mscca_rwrapper(n_components = self.n_components_,
+#											L1_penalty = self.L1_penalty_,
+#											max_iter = max_piter).fit(self.permute_views(self.views_train_, seed))
+#		if permute_prediction:
+#			rho_train = []
+#			rho_train_targets = []
+#			for v in range(self.nviews_):
+#				viewhat = perm_mssca.predict(perm_mssca.views_[v], v)
+#				rho_train.append(perm_mssca._rscore(perm_mssca.views_[v], viewhat))
+#				rho_train_targets.append(perm_mssca._rscore(perm_mssca.views_[v], viewhat, mean_score = False))
+#			rho_test = []
+#			rho_test_targets = []
+#			for v in range(self.nviews_):
+#				viewhat = perm_mssca.predict(self.views_test_[v], v)
+#				rho_test.append(perm_mssca._rscore(self.views_test_[v], viewhat))
+#				rho_test_targets.append(perm_mssca._rscore(self.views_test_[v], viewhat, mean_score = False))
+
+#		# fisher z transformation arctanh
+#		perm_cancor_pairwise_train_, _ = perm_mssca.canonicalcorrviews()
+#		perm_cancor_pairwise_train_ = np.arctanh(perm_cancor_pairwise_train_)
+#		perm_cancor_sum_train_ = perm_cancor_pairwise_train_.sum(0)
+#		perm_loadings_train_ = perm_mssca.loadings_
+#		for v in range(self.nviews_):
+#			perm_loadings_train_[v] = np.arctanh(perm_loadings_train_[v])
+#		perm_cancor_pairwise_test_, _ = perm_mssca.canonicalcorrviews(self.views_test_)
+#		perm_cancor_pairwise_test_ = np.arctanh(perm_cancor_pairwise_test_)
+#		perm_cancor_sum_test_ = perm_cancor_pairwise_test_.sum(0)
+#		
+#		return(perm_cancor_sum_train_, perm_cancor_sum_test_, perm_cancor_pairwise_train_, perm_cancor_pairwise_test_, perm_loadings_train_)
+
+#	def _calc_perm_loadings_significance(self):
+#		permloadings = self.perm_loadings_train_
+#		nperm = len(permloadings)
+#		loadings = self.loadings_train_
+#		newpermloadings = []
+#		zvalues = []
+#		pvalues = []
+#		for l, loading in enumerate(loadings):
+#			abszloading = np.arctanh(abs(loading))
+#			temp = np.zeros((nperm, loading.shape[0], loading.shape[1]))
+#			for i in range(nperm):
+#				temp[i] = abs(permloadings[i][l])
+#	#			temp[i] = np.square(permloadings[i][l])
+
+#			ztemp = np.divide((abs(abszloading) - temp.mean(0)), temp.std(0))
+#			ptemp = np.ones_like(ztemp)
+#			for k in range(len(ztemp)):
+#				ptemp[k] = self.fwer_corrected_p(temp[:,k,:], abszloading[k], apply_fwer_correction = False)
+#			newpermloadings.append(temp)
+#			zvalues.append(ztemp)
+#			pvalues.append(ptemp)
+#		self.perm_loadings_train_abs_ = newpermloadings
+#		self.perm_loadings_train_zvalues_ = zvalues
+#		self.perm_loadings_train_pvalues_ = pvalues
+
+
+#	def run_permute_mscca(self, permute_prediction = False):
+#		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+#		seeds = generate_seeds(self.n_permutations)
+#		output = Parallel(n_jobs = self.n_jobs, backend='multiprocessing')(delayed(self._permute_function_mscca)(p, permute_prediction = permute_prediction, seed = seeds[p]) for p in range(self.n_permutations))
+#		perm_cc_train_sum, perm_cc_test_sum, perm_cc_train, perm_cc_test, perm_loadings_train = zip(*output)
+
+#		self.perm_cc_train_sum_ = np.array(perm_cc_train_sum)
+#		self.perm_cc_test_sum_ = np.array(perm_cc_test_sum)
+#		self.perm_cc_train_ = np.array(perm_cc_train)
+#		self.perm_cc_test_ = np.array(perm_cc_test)
+#		self.perm_loadings_train_ = perm_loadings_train
+
+#		self._calc_perm_loadings_significance()
+#		self.canonicalcorrelation_train_sum_pvalue_ = self.fwer_corrected_p(self.perm_cc_train_sum_, self.canonicalcorrelation_train_zsum_, apply_fwer_correction=False)
+#		self.canonicalcorrelation_test_sum_pvalue_ = self.fwer_corrected_p(self.perm_cc_test_sum_, self.canonicalcorrelation_test_zsum_, apply_fwer_correction=False)
+
+#		nviewcomparisons = self.perm_cc_test_.shape[1]
+#		zcc_train_pairwise = np.arctanh(self.canonicalcorrelation_train_pairwise_)
+#		zcc_test_pairwise = np.arctanh(self.canonicalcorrelation_test_pairwise_)
+#		temp_cc_train_pair_z = np.zeros_like(zcc_train_pairwise)
+#		temp_cc_train_pair_p = np.ones_like(zcc_train_pairwise)
+#		temp_cc_test_pair_z = np.zeros_like(zcc_test_pairwise)
+#		temp_cc_test_pair_p = np.ones_like(zcc_test_pairwise)
+#		for i in range(nviewcomparisons):
+#			temp_cc_train_pair_z[i] = np.divide(zcc_train_pairwise[i] - np.mean(self.perm_cc_train_[:,i,:]), np.std(self.perm_cc_train_[:,i,:]))
+#			temp_cc_train_pair_p[i] = self.fwer_corrected_p(self.perm_cc_train_[:,i,:], zcc_train_pairwise[i], apply_fwer_correction=False)
+#			temp_cc_test_pair_z[i] = np.divide(zcc_test_pairwise[i] - np.mean(self.perm_cc_test_[:,i,:]), np.std(self.perm_cc_test_[:,i,:]))
+#			temp_cc_test_pair_p[i] = self.fwer_corrected_p(self.perm_cc_test_[:,i,:], zcc_test_pairwise[i], apply_fwer_correction=False)
+#		self.canonicalcorrelation_train_pairwise_zscore_ = temp_cc_train_pair_z
+#		self.canonicalcorrelation_train_pairwise_pvalue_ = temp_cc_train_pair_p
+#		self.canonicalcorrelation_test_pairwise_zscore_ = temp_cc_test_pair_z
+#		self.canonicalcorrelation_test_pairwise_pvalue_ = temp_cc_test_pair_p
 
 	def _convertl1penalty(self, pens, views, reverse = False):
 		"""
@@ -1562,6 +2050,25 @@ class parallel_mscca():
 					outpen[p] = pens*np.sqrt(views[p].shape[1])
 		return(np.array(outpen))
 
+	def _preprocessviews(self, views, centre = True, scale = True, axis = 0):
+		"""
+		Centres and scales the dataviews
+		"""
+		vmeans = []
+		vstd = []
+		for i, x in enumerate(views):
+			x_mean = np.mean(x, axis = axis)
+			x_std = np.std(x, axis = axis)
+			if centre:
+				x = x - x_mean
+			if scale:
+				x = np.divide(x, x_std)
+			views[i] = x
+			vmeans.append(x_mean)
+			vstd.append(x_std)
+		return(views, vmeans, vstd)
+
+
 	def fit_model(self, views, n_components, L1_penalty, max_iter = 100):
 		"""
 		Calculates r_train, r_train_components, q_train, q_train_components, r_test, r_test_components for overal model and targets
@@ -1580,13 +2087,12 @@ class parallel_mscca():
 		self.cvgroups_ = grouping_var
 
 
-		views_train = self.subsetviews(views, self.train_index_)
+		views_train = self._preprocessviews(self.subsetviews(views, self.train_index_))[0]
 		self.views_train_ = views_train
-		views_test = self.subsetviews(views, self.test_index_)
+		views_test = self._preprocessviews(self.subsetviews(views, self.test_index_))[0]
 		self.views_test_ = views_test
 
 		mscca = mscca_rwrapper(n_components = n_components, L1_penalty = L1_penalty).fit(views_train)
-		self.rho_indices, self.rho_train_, self.rho_train_targets_ =  mscca._rscore_crossprediction()
 		
 		cancor_pairwise, cancor_sum = mscca.canonicalcorrviews()
 		self.canonicalcorrelation_train_pairwise_ = cancor_pairwise
@@ -1595,7 +2101,6 @@ class parallel_mscca():
 		self.canonicalcorrelation_train_zsum_ = np.arctanh(cancor_pairwise).sum(0)
 		self.loadings_train_ = mscca.loadings_
 		
-		_, self.rho_test_, self.rho_test_targets_ =  mscca._rscore_crossprediction(views_true = views_test)
 		cancor_pairwise, cancor_sum = mscca.canonicalcorrviews(views_test)
 		self.canonicalcorrelation_test_pairwise_ = cancor_pairwise
 		self.canonicalcorrelation_test_sum_ = cancor_sum
@@ -1606,6 +2111,49 @@ class parallel_mscca():
 		self.L1_penalty_ = L1_penalty
 		self.max_iter_ = max_iter
 		self.model_obj_ = mscca
+
+
+	def _mview_model_reg(self, views, idx):
+		"""
+		Regress the views scores of an index view against
+		"""
+		y = self.model_obj_.transform(views[idx], idx)
+		if y.ndim == 1:
+			y = y.reshape(-1,1)
+		xind = np.arange(0, self.nviews_, 1)
+		xind = xind[xind != idx]
+		c = 0
+		Xc = np.ones((len(views), y.shape[0], self.model_obj_.n_components))
+		for i, v in enumerate(xind):
+			Xc[(i+1),:,:] = self.model_obj_.transform(views[v], v)
+		mviewpred = np.zeros((self.model_obj_.n_components, y.shape[0]))
+		mviewr = np.zeros((self.model_obj_.n_components))
+		for c in range(self.model_obj_.n_components):
+			X = Xc[:,:,c].T
+			yactual = y[:,c]
+			a = (np.linalg.inv(X.T.dot(X)).dot(X.T)).dot(yactual)
+			ypred = np.dot(X, a)
+			mviewpred[c] = ypred
+			mviewr[c] = np.corrcoef(yactual, ypred)[1,0]
+		mviewpred = mviewpred.T
+		return(mviewpred, mviewr)
+
+	def fit_model_reg(self, views = None, dview_index = 0):
+		assert hasattr(self,'model_obj_'), "Error: run fit_model"
+		if views is None:
+			# training data
+			mviewpred, mview_r = self._mview_model_reg(self.views_train_, dview_index)
+			self.mviewpred_train_ = mviewpred
+			self.mviewr_train_ = mview_r
+			# test data
+			mviewpred, mview_r = self._mview_model_reg(self.views_test_, dview_index)
+			self.mviewpred_test_ = mviewpred
+			self.mviewr_test_ = mview_r
+			self.mview_dview_index_ = dview_index
+		else:
+			views = self._preprocessviews(views)[0]
+			assert len(views) == len(self.views_train_), "Error the length of views [%d] doesn't match the model [%d]." % (len(views), len(self.views_train_))
+			mviewpred, mview_r = self._mview_model_reg(views, dview_index)
 
 	def plot_ve_component_range(self, L1_penalty = None, component_range = [1, 16], verbose = True, png_basename = None):
 		if L1_penalty is None:
@@ -2278,6 +2826,7 @@ class scca_rwrapper:
 			else:
 				x_predicted = None
 		return(x_predicted, y_predicted)
+
 
 class spls_rwrapper:
 	"""
